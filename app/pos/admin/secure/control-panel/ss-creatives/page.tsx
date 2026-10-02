@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   User,
   Receipt,
@@ -374,6 +375,7 @@ export default function POSBilling() {
   const [passcodeError, setPasscodeError] = useState<string>("");
   const [showPasscode, setShowPasscode] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
+  const router = useRouter();
 
   const [activeCategory, setActiveCategory] = useState<string>("ALL");
   const [activeTab, setActiveTab] = useState<
@@ -1191,6 +1193,7 @@ export default function POSBilling() {
       // Route directly into Advance Orders management screen
       setActiveTab("advance");
       await fetchData();
+      router.refresh();
 
       // Show a shareable receipt modal (Print / WhatsApp / New Sale).
       setAdvanceReceipt({
@@ -4661,15 +4664,19 @@ export default function POSBilling() {
 
             {/* Rows */}
             <div className="bg-white border border-black/10 rounded-xl overflow-hidden">
-              <div className="hidden md:grid grid-cols-[1.5fr_1.5fr_2fr_2fr_1.2fr_1.3fr_1.8fr] gap-2 px-4 py-3 border-b border-black/10 text-[10px] font-black uppercase tracking-wider text-[#007A87] bg-[#F9FAFB] items-center">
-                <span>Deposit ID</span>
-                <span>Customer</span>
-                <span>Product</span>
-                <span>Total / Paid / Balance</span>
-                <span className="text-center justify-self-center">Delivery</span>
-                <span className="text-center justify-self-center">Status</span>
-                <span className="text-right justify-self-end">Actions</span>
-              </div>
+              <table className="w-full table-fixed border-collapse">
+              <thead>
+                <tr className="border-b border-black/10 text-[10px] font-black uppercase tracking-wider text-[#007A87] bg-[#F9FAFB]">
+                  <th className="w-[13%] text-left px-4 py-3">Deposit ID</th>
+                  <th className="w-[14%] text-left px-4 py-3">Customer</th>
+                  <th className="w-[16%] text-left px-4 py-3">Product</th>
+                  <th className="w-[18%] text-left px-4 py-3">Total / Paid / Balance</th>
+                  <th className="w-[10%] text-center px-4 py-3">Delivery</th>
+                  <th className="w-[12%] text-center px-4 py-3">Status</th>
+                  <th className="w-[17%] text-right pr-4 py-3">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
               {(() => {
                 const q = advSearchQuery.trim().toLowerCase();
                 const filtered = advanceOrders.filter((a) => {
@@ -4686,9 +4693,7 @@ export default function POSBilling() {
                 });
                 if (filtered.length === 0) {
                   return (
-                    <div className="p-8 text-center text-xs font-bold text-[#007A87]">
-                      No advance orders match the current filters.
-                    </div>
+                    <tr><td colSpan={7} className="p-8 text-center text-xs font-bold text-[#007A87]">No advance orders match the current filters.</td></tr>
                   );
                 }
                 return filtered.map((a) => {
@@ -4700,16 +4705,16 @@ export default function POSBilling() {
                     CANCELLED: "bg-[#FEE2E2] text-[#991B1B] border-[#DC2626]/30",
                   };
                   return (
-                    <div key={a.id} className="grid grid-cols-1 md:grid-cols-[1.5fr_1.5fr_2fr_2fr_1.2fr_1.3fr_1.8fr] gap-2 px-4 py-3 border-b border-black/5 items-center text-xs hover:bg-[#FAFAFA]">
-                      <div>
+                    <tr key={a.id} className="border-b border-black/5 hover:bg-[#FAFAFA] text-xs">
+                      <td className="w-[13%] text-left px-4 py-3 align-middle">
                         <p className="text-xs font-bold text-slate-950 font-mono">{a.id}</p>
                         <p className="text-[11px] text-slate-400">{new Date(a.created_at).toLocaleDateString()}</p>
-                      </div>
-                      <div>
+                      </td>
+                      <td className="w-[14%] text-left px-4 py-3 align-middle">
                         <p className="font-black text-black">{a.customer_name}</p>
                         <p className="text-[10px] text-[#007A87]">{a.customer_phone}</p>
-                      </div>
-                      <div className="text-[11px]">
+                      </td>
+                      <td className="w-[16%] text-left px-4 py-3 align-middle text-[11px]">
                         {a.items.slice(0, 2).map((i) => (
                           <p key={i.id} className="font-bold text-black truncate">
                             {i.quantity}× {i.snapshot_name}
@@ -4718,31 +4723,33 @@ export default function POSBilling() {
                         {a.items.length > 2 && (
                           <p className="text-[10px] text-[#007A87]">+{a.items.length - 2} more</p>
                         )}
-                      </div>
-                      <div className="space-y-0.5">
-                        <p className="text-xs font-bold text-slate-900">Total: ₹{Number(a.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                        <p className="text-xs font-semibold text-emerald-600">Paid: ₹{Number(a.deposit_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                        <p className="text-xs font-semibold text-rose-600">Balance: ₹{bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                      </div>
-                      <div className="text-center justify-self-center font-medium text-slate-700 text-xs">
+                      </td>
+                      <td className="w-[18%] text-left px-4 py-3 align-middle">
+                        <div className="space-y-0.5">
+                          <p className="text-xs font-bold text-slate-900">Total: ₹{Number(a.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                          <p className="text-xs font-semibold text-emerald-600">Paid: ₹{Number(a.deposit_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                          <p className="text-xs font-semibold text-rose-600">Balance: ₹{bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                        </div>
+                      </td>
+                      <td className="w-[10%] text-center px-4 py-3 align-middle font-medium text-slate-700 text-xs">
                         {a.delivery_date ? new Date(a.delivery_date).toLocaleDateString("en-IN") : "—"}
-                      </div>
-                      <div className="text-center justify-self-center">
+                      </td>
+                      <td className="w-[12%] text-center px-4 py-3 align-middle">
                         <div className="flex flex-col items-center justify-center gap-1">
-                          <span className={`inline-block px-3 py-0.5 rounded-full text-xs font-semibold border ${statusStyles[a.status]}`}>
+                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${statusStyles[a.status]}`}>
                             {a.status || "PENDING"}
                           </span>
                           {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
                             <button
                               onClick={() => toggleAdvanceReady(a)}
-                              className="text-[11px] font-bold text-blue-600 hover:underline tracking-tight uppercase cursor-pointer"
+                              className="text-[10px] font-bold text-blue-600 hover:underline tracking-tight uppercase cursor-pointer"
                             >
-                              MARK AS {a.status === "READY" ? "PENDING" : "READY"}
+                              {a.status === "READY" ? "Mark Pending" : "Mark Ready"}
                             </button>
                           )}
                         </div>
-                      </div>
-                      <div className="flex items-center justify-end gap-1.5 flex-nowrap">
+                      </td>
+                      <td className="w-[17%] text-right pr-4 py-3 align-middle"><div className="flex items-center justify-end gap-1 flex-nowrap">
                         <button onClick={() => shareAdvanceReceiptWhatsApp({
                           id: a.id,
                           customerName: a.customer_name,
@@ -4780,11 +4787,13 @@ export default function POSBilling() {
                             <Trash2 className="w-4 h-4" />
                           </button>
                         )}
-                      </div>
-                    </div>
-                  );
-                });
-              })()}
+                      </div></td>
+                  </tr>
+                );
+              });
+            })()}
+              </tbody>
+            </table>
             </div>
           </div>
         )}

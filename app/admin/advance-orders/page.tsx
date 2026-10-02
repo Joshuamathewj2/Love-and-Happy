@@ -7,9 +7,6 @@ import { ArrowLeft, Clock, MessageSquare, FileText, Eye, IndianRupee, Trash2, Re
 import { fetchAdvanceOrders, removeAdvanceOrder } from "@/app/pos/actions";
 import { AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
 
-export const dynamic = "force-dynamic";
-export const revalidate = 0;
-
 type FilterTab = "ALL" | AdvanceOrderStatus;
 
 export default function AdminAdvanceOrdersPage() {

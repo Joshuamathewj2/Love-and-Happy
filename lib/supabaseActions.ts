@@ -281,7 +281,7 @@ export async function supabaseSeedCatalog(): Promise<{ categoriesCount: number; 
   let categoriesCount = 0;
   let productsCount = 0;
 
-  const catRows = LOVE_AND_HAPPY_CATEGORIES.map((c) => ({
+  const catRows = LOVE_AND_HAPPY_CATEGORIES.map((c: any) => ({
     id: c.id,
     name: c.name,
     created_at: c.created_at,
@@ -305,7 +305,7 @@ export async function supabaseSeedCatalog(): Promise<{ categoriesCount: number; 
       productsCount += chunk.length;
     }
 
-    const catalogChunk = chunk.map((p) => ({
+    const catalogChunk = chunk.map((p: any) => ({
       id: p.id,
       name: p.name,
       category: p.category,
