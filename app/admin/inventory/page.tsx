@@ -227,7 +227,7 @@ export default function AdminInventoryPage() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Link
-                href="/pos/admin/secure/control-panel/ss-creatives"
+                href="/pos/admin/secure/control-panel/love-and-happy"
                 className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors"
               >
                 <ArrowLeft className="w-3.5 h-3.5" /> Back to POS Control Panel
@@ -250,7 +250,7 @@ export default function AdminInventoryPage() {
               <RefreshCw className="w-3.5 h-3.5" /> Refresh
             </button>
             <Link
-              href="/pos/admin/secure/control-panel/ss-creatives"
+              href="/pos/admin/secure/control-panel/love-and-happy"
               className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
             >
               Open POS Register

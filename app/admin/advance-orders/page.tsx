@@ -347,7 +347,7 @@ export default function AdminAdvanceOrdersPage() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Link
-                href="/pos/admin/secure/control-panel/ss-creatives"
+                href="/pos/admin/secure/control-panel/love-and-happy"
                 className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors"
               >
                 <ArrowLeft className="w-3.5 h-3.5" /> Back to POS Control Panel
@@ -650,7 +650,7 @@ export default function AdminAdvanceOrdersPage() {
                           {/* Collect Payment */}
                           {statusUpper !== "COMPLETED" && statusUpper !== "CANCELLED" && (
                             <Link
-                              href="/pos/admin/secure/control-panel/ss-creatives"
+                              href="/pos/admin/secure/control-panel/love-and-happy"
                               title="Collect Payment"
                               className="flex items-center justify-center w-7 h-7 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-md transition-colors shrink-0"
                             >

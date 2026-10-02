@@ -380,7 +380,7 @@ export default function AdminOrdersPage() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <Link
-                href="/pos/admin/secure/control-panel/ss-creatives"
+                href="/pos/admin/secure/control-panel/love-and-happy"
                 className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors"
               >
                 <ArrowLeft className="w-3.5 h-3.5" /> Back to POS Control Panel

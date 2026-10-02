@@ -375,6 +375,8 @@ export default function POSBilling() {
   const [passcodeError, setPasscodeError] = useState<string>("");
   const [showPasscode, setShowPasscode] = useState<boolean>(false);
   const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [showInstallBanner, setShowInstallBanner] = useState<boolean>(false);
   const router = useRouter();
 
   const [activeCategory, setActiveCategory] = useState<string>("ALL");
@@ -572,6 +574,54 @@ export default function POSBilling() {
     setPasscode("");
     setPasscodeError("");
     setIsAuthorized(false);
+  };
+
+  // PWA Install Event Listeners & Handler
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    // Check if app is already running in standalone display mode
+    const isStandalone =
+      window.matchMedia("(display-mode: standalone)").matches ||
+      (window.navigator as any).standalone === true;
+
+    if (isStandalone) {
+      setShowInstallBanner(false);
+      return;
+    }
+
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowInstallBanner(true);
+    };
+
+    const handleAppInstalled = () => {
+      setShowInstallBanner(false);
+      setDeferredPrompt(null);
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstallPrompt);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallPwa = async () => {
+    if (!deferredPrompt) return;
+    try {
+      deferredPrompt.prompt();
+      const choiceResult = await deferredPrompt.userChoice;
+      if (choiceResult?.outcome === "accepted") {
+        setShowInstallBanner(false);
+        setDeferredPrompt(null);
+      }
+    } catch (err) {
+      console.error("Error triggering PWA install:", err);
+    }
   };
 
   const productToCatalogItem = (p: Product): CatalogItem => {
@@ -2433,6 +2483,31 @@ export default function POSBilling() {
         <div className="mt-6 text-[#1C1917]/30 text-[9px] font-bold tracking-widest uppercase">
           Love & Happy Unisex Salon Terminal v2.1.0
         </div>
+
+        {/* PWA Floating Install Banner */}
+        {showInstallBanner && (
+          <div className="fixed bottom-6 right-6 z-50 bg-black border border-teal-500/30 rounded-2xl p-3 px-4 flex items-center gap-3.5 shadow-2xl animate-in fade-in slide-in-from-bottom-3 duration-300">
+            <div className="w-10 h-10 rounded-xl border border-teal-500/40 flex items-center justify-center text-teal-400 shrink-0">
+              <Smartphone className="w-5 h-5" />
+            </div>
+            <div className="flex flex-col text-left">
+              <span className="text-xs font-bold text-white tracking-wide uppercase">
+                INSTALL LOVE &amp; HAPPY
+              </span>
+              <span className="text-[11px] text-slate-400">
+                Unisex Salon • POS &amp; Billing App
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleInstallPwa}
+              className="bg-[#008f9c] hover:bg-[#007a85] text-white text-xs font-bold px-4 py-2 rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer shrink-0 ml-2"
+            >
+              <Download className="w-3.5 h-3.5" />
+              INSTALL
+            </button>
+          </div>
+        )}
       </div>
     );
   }

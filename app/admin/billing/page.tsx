@@ -170,7 +170,7 @@ export default function AdminBillingPage() {
         <div className="flex items-center justify-between bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs">
           <div>
             <Link
-              href="/pos/admin/secure/control-panel/ss-creatives"
+              href="/pos/admin/secure/control-panel/love-and-happy"
               className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-slate-900 transition-colors mb-1"
             >
               <ArrowLeft className="w-3.5 h-3.5" /> Back to POS Control Panel

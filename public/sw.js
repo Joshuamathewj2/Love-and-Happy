@@ -6,7 +6,7 @@ const ASSETS_TO_CACHE = [
   '/logo.png',
   '/icon.png',
   '/apple-touch-icon.png',
-  '/pos/admin/secure/control-panel/ss-creatives'
+  '/pos/admin/secure/control-panel/love-and-happy'
 ];
 
 self.addEventListener('install', (event) => {

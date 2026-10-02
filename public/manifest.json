@@ -2,7 +2,7 @@
   "name": "Love & Happy Unisex Salon - POS",
   "short_name": "Love & Happy",
   "description": "Love & Happy Unisex Salon Point of Sale, Billing & Client Management",
-  "start_url": "/pos/admin/secure/control-panel/ss-creatives",
+  "start_url": "/pos/admin/secure/control-panel/love-and-happy",
   "display": "standalone",
   "background_color": "#FFFFFF",
   "theme_color": "#0097A7",
