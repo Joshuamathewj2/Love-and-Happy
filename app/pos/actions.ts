@@ -1,6 +1,7 @@
 "use server";
 
 import { dbStore } from "@/lib/dbStore";
+import { supabaseFetchCategories, supabaseFetchProducts, supabaseSeedCatalog } from "@/lib/supabaseActions";
 import { Product, OrderWithRelations, CartItem, Expense, PaymentMode, Category, AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
 
 // Helper to serialize Date objects from Postgres to strings
@@ -25,8 +26,24 @@ export async function verifyPasscode(enteredPasscode: string): Promise<{ success
   return { success: false };
 }
 
-// Categories
+// ── Catalog Seeding ─────────────────────────────────────────────────────────
+/** Seed catalog into legacy Neon DB (kept for backward compat). */
+export async function seedCatalog(): Promise<{ categoriesCount: number; productsCount: number }> {
+  return await dbStore.seedDefaultCatalog();
+}
+
+/** Seed all 13 categories + 136 services into Supabase. */
+export async function seedCatalogToSupabase(): Promise<{ categoriesCount: number; productsCount: number }> {
+  return await supabaseSeedCatalog();
+}
+
+// ── Categories ──────────────────────────────────────────────────────────────
+/**
+ * Fetch categories: Supabase first, falls back to Neon → local data.
+ */
 export async function fetchCategories(): Promise<Category[]> {
+  const supabaseResult = await supabaseFetchCategories();
+  if (supabaseResult && supabaseResult.length > 0) return serialize(supabaseResult);
   return serialize(await dbStore.listCategories());
 }
 
@@ -42,8 +59,14 @@ export async function removeCategory(id: string): Promise<void> {
   return await dbStore.deleteCategory(id);
 }
 
-// Products
+// ── Products ─────────────────────────────────────────────────────────────────
+/**
+ * Fetch products: Supabase first, falls back to Neon → local data.
+ * This drives the POS catalog modal and item auto-suggest.
+ */
 export async function fetchProducts(): Promise<Product[]> {
+  const supabaseResult = await supabaseFetchProducts();
+  if (supabaseResult && supabaseResult.length > 0) return serialize(supabaseResult);
   return serialize(await dbStore.listProducts());
 }
 

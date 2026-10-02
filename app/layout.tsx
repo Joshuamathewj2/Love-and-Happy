@@ -11,7 +11,7 @@ const poppins = Poppins({
 });
 
 export const viewport: Viewport = {
-  themeColor: "#35617C",
+  themeColor: "#0097A7",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
@@ -19,17 +19,17 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  title: "SS CREATIVES - POS",
-  description: "SS CREATIVES Billing, Inventory & Digital Invoices",
+  title: "Love & Happy Unisex Salon - POS Billing",
+  description: "Love & Happy Unisex Salon Point of Sale, Billing, Inventory & Digital Invoices",
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
     statusBarStyle: "default",
-    title: "SS CREATIVES",
+    title: "Love & Happy Unisex Salon",
   },
   icons: {
-    icon: "/logo.jpeg",
-    apple: "/logo.jpeg",
+    icon: "/icon.png",
+    apple: "/apple-touch-icon.png",
   },
 };
 
@@ -47,8 +47,8 @@ export default function RootLayout({
         <link rel="manifest" href="/manifest.json" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-        <meta name="apple-mobile-web-app-title" content="SS CREATIVES" />
-        <link rel="apple-touch-icon" href="/logo.jpeg" />
+        <meta name="apple-mobile-web-app-title" content="Love & Happy Unisex Salon" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
       </head>
       <body className="min-h-full flex flex-col">
         {children}

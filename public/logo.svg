@@ -1,16 +1,16 @@
-<svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="SS CREATIVES">
-  <g fill="#18181B">
-    <!-- Crown spikes -->
-    <path d="M56 104 L64 48 L84 80 L102 56 L111 69 L120 40 L129 69 L138 56 L156 80 L176 48 L184 104 Z" />
-    <!-- Crown band -->
-    <rect x="54" y="102" width="132" height="18" rx="6" />
-    <!-- Band highlight (echoes the ring gap in the mark) -->
-    <rect x="60" y="108" width="120" height="3.5" rx="1.75" fill="#FFFFFF" />
-  </g>
-  <!-- Stylised R (rounded brush strokes) -->
-  <g fill="none" stroke="#18181B" stroke-width="16" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M96 124 L96 208" />
-    <path d="M96 124 C 152 118 152 172 96 168" />
-    <path d="M108 162 L150 208" />
+<svg viewBox="0 0 800 350" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Love &amp; Happy Unisex Salon">
+  <rect width="100%" height="100%" fill="#000000" rx="16" />
+  <g fill="#FFFFFF" font-family="'Segoe UI', 'Poppins', -apple-system, sans-serif">
+    <!-- Love script-like header with red heart -->
+    <text x="140" y="160" font-size="110" font-weight="900" font-style="italic" letter-spacing="-1">L</text>
+    <!-- Heart in the 'o' -->
+    <path d="M 230 118 C 218 100 188 112 188 132 C 188 152 230 180 230 180 C 230 180 272 152 272 132 C 272 112 242 100 230 118 Z" fill="#C62828" stroke="#FFFFFF" stroke-width="4" />
+    <text x="278" y="160" font-size="100" font-weight="900" letter-spacing="-1">ve</text>
+    <text x="400" y="150" font-size="80" font-weight="900" fill="#FFFFFF">&amp;</text>
+    <text x="100" y="240" font-size="28" font-weight="800" letter-spacing="8" fill="#FFFFFF">UNISEX SALON</text>
+    <!-- Happy with smile -->
+    <text x="380" y="270" font-size="120" font-weight="900" letter-spacing="-1">Happy</text>
+    <!-- Red Smile -->
+    <path d="M 500 285 Q 590 345 680 285 Q 590 320 500 285 Z" fill="#C62828" />
   </g>
 </svg>

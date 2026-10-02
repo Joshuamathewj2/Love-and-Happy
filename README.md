@@ -1,6 +1,6 @@
-# SS CREATIVES — POS & Inventory Billing System
+# Love & Happy Unisex Salon — POS & Billing System
 
-A PWA-enabled Point of Sale (POS), billing, and inventory management system for **SS CREATIVES**, Tiruchendur. It handles quick invoice generation, WhatsApp delivery of digital receipts, order history, GST / non-GST billing with two revenue dashboards, and stock management with low-stock alerts.
+A PWA-enabled Point of Sale (POS), billing, and client service management system for **Love & Happy Unisex Salon**, Tiruchendur. It handles quick invoice generation, WhatsApp delivery of digital receipts, order history, GST / non-GST billing with two revenue dashboards, and full salon services catalog.
 
 ## Features
 
@@ -103,6 +103,6 @@ The role is determined by which passcode is used to log in.
 
 ## License
 
-© 2026 SS CREATIVES. All Rights Reserved.
+© 2026 Love & Happy Unisex Salon. All Rights Reserved.
 
 Powered by [Cenexa Systems](https://www.cenexasystems.com/).

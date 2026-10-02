@@ -7,11 +7,22 @@ export type Category = {
 export type Product = {
   id: string;
   name: string;
-  description: string | null;
+  description?: string | null;
   category: string;
   gst_rate: number; // Default GST % for this product (editable at billing)
-  hsn_code: string | null; // HSN/SAC code shown on GST invoices
+  hsn_code?: string | null; // HSN/SAC code shown on GST invoices
   selling_price: number; // GST-inclusive catalog price
+  price?: number;
+  offer_price?: number;
+  purchase_price?: number;
+  sku?: string;
+  stock_quantity?: number;
+  low_stock_alert?: number;
+  unit?: string;
+  unit_label?: string;
+  item_type?: 'service' | 'product';
+  image_url?: string | null;
+  is_active?: boolean;
   created_at: string;
 };
 

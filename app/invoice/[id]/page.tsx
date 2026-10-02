@@ -218,7 +218,8 @@ export default async function InvoicePage({
         <div className={`invoice-sheet bg-white mx-auto text-black font-mono leading-tight p-3 ${size === "58" ? "w-[260px]" : "w-[320px]"}`}>
           {/* Thermal Receipt Layout */}
           <div className="text-center pb-3 border-b border-dashed border-black/40 mb-3">
-            <h1 className="text-xl font-bold tracking-tight">SS CREATIVES</h1>
+            <h1 className="text-xl font-bold tracking-tight">LOVE &amp; HAPPY</h1>
+            <p className="text-[11px] font-bold tracking-wider uppercase text-zinc-700">Unisex Salon</p>
             <p className="text-[11px] mt-1">55/6, Melaratha Veethi</p>
             <p className="text-[11px]">Tiruchendur, TN - 628215</p>
             <p className="text-[11px]">Ph: +91 88072 99918</p>
@@ -295,16 +296,16 @@ export default async function InvoicePage({
         {/* Header: Company & Invoice Info */}
         <div className="flex flex-col sm:flex-row justify-between items-start gap-6 pb-6 border-b border-zinc-200">
           <div className="flex items-start gap-3.5 sm:gap-4">
-            <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-sm border border-zinc-200 overflow-hidden bg-white p-1">
+            <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-sm border border-zinc-300 overflow-hidden bg-black p-1">
               <img
                 src="/logo.jpeg"
-                alt="SS Creatives"
+                alt="Love & Happy Unisex Salon"
                 className="w-full h-full object-contain"
               />
             </div>
             <div className="space-y-1">
               <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
-                SS CREATIVES
+                Love &amp; Happy Unisex Salon
               </h1>
               <p className="text-xs text-zinc-500 leading-relaxed max-w-xs">
                 55/6, Melaratha Veethi, Tiruchendur, Tamil Nadu - 628215
@@ -502,9 +503,9 @@ export default async function InvoicePage({
 
             {/* Simple Terms */}
             <div className="text-[11px] text-zinc-500 leading-relaxed pt-2">
-              <p className="font-medium text-zinc-700 mb-0.5">Terms & Notes:</p>
+              <p className="font-medium text-zinc-700 mb-0.5">Terms &amp; Notes:</p>
               <p>• Goods once sold can only be exchanged within 7 days with this invoice.</p>
-              <p>• Custom-stitched and altered garments are made to order and are non-returnable.</p>
+              <p>• Salon services and custom beauty treatments are non-refundable.</p>
             </div>
           </div>
 
@@ -578,7 +579,7 @@ export default async function InvoicePage({
         {/* Signatory & Machine Note */}
         <div className="mt-12 pt-6 border-t border-zinc-200 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 text-xs">
           <div className="text-[11px] text-zinc-400">
-            Thank you for your visit! • SS Creatives POS
+            Thank you for your visit! • Love &amp; Happy Unisex Salon POS
           </div>
 
           <div className="sm:text-right space-y-1 self-end">
@@ -586,7 +587,7 @@ export default async function InvoicePage({
             <div className="font-semibold text-zinc-800 text-xs">
               Authorised Signatory
             </div>
-            <div className="text-[10px] text-zinc-400">For SS Creatives</div>
+            <div className="text-[10px] text-zinc-400">For Love &amp; Happy Unisex Salon</div>
           </div>
         </div>
         </div>

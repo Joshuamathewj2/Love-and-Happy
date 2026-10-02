@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Download, Check, Smartphone } from "lucide-react";
+import { Download, Smartphone } from "lucide-react";
 
 export default function PWAHandler() {
   const pathname = usePathname();
@@ -84,21 +84,21 @@ export default function PWAHandler() {
   if (isInstalled || !isInstallable || pathname?.startsWith("/invoice") || isAuthorized) return null;
 
   return (
-    <div className="fixed bottom-3 left-3 right-3 sm:left-auto sm:right-4 sm:bottom-4 z-50 bg-[#000000] text-white p-2.5 sm:p-4 rounded-2xl shadow-2xl border-2 border-[#35617C] flex items-center gap-2.5 sm:gap-3 animate-in slide-in-from-bottom-5 duration-300 w-auto sm:max-w-[360px] print:hidden">
-      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-[#35617C]/20 border border-[#35617C] flex items-center justify-center shrink-0">
-        <Smartphone className="w-4 h-4 sm:w-5 sm:h-5 text-[#35617C]" />
+    <div className="fixed bottom-3 left-3 right-3 sm:left-auto sm:right-4 sm:bottom-4 z-50 bg-[#000000] text-white p-2.5 sm:p-4 rounded-2xl shadow-2xl border-2 border-[#0097A7] flex items-center gap-2.5 sm:gap-3 animate-in slide-in-from-bottom-5 duration-300 w-auto sm:max-w-[360px] print:hidden">
+      <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-[#0097A7]/20 border border-[#0097A7] flex items-center justify-center shrink-0">
+        <Smartphone className="w-4 h-4 sm:w-5 sm:h-5 text-[#0097A7]" />
       </div>
       <div className="flex-1 min-w-0">
         <h4 className="text-[11px] sm:text-xs font-black tracking-tight text-white uppercase truncate">
-          Install SS CREATIVES
+          Install Love &amp; Happy
         </h4>
         <p className="text-[9px] sm:text-[10px] text-gray-300 font-semibold truncate">
-          Add app for fast offline access
+          Unisex Salon • POS &amp; Billing App
         </p>
       </div>
       <button
         onClick={handleInstallClick}
-        className="bg-[#35617C] hover:bg-[#7C5A52] text-white text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl transition-all cursor-pointer shadow-sm flex items-center gap-1 shrink-0"
+        className="bg-[#0097A7] hover:bg-[#007A87] text-white text-[9px] sm:text-[10px] font-black uppercase tracking-wider px-2.5 sm:px-3.5 py-1.5 sm:py-2 rounded-xl transition-all cursor-pointer shadow-sm flex items-center gap-1 shrink-0"
       >
         <Download className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
         Install

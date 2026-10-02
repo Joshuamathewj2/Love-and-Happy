@@ -14,6 +14,7 @@ import {
   AdvanceOrderStatus,
   AdvanceOrderWithRelations,
 } from './types';
+import { LOVE_AND_HAPPY_CATEGORIES, LOVE_AND_HAPPY_PRODUCTS } from './catalogData';
 
 // Utility to generate a unique ID
 const uid = () => {
@@ -24,10 +25,47 @@ const uid = () => {
 };
 
 export const dbStore = {
+  // SEED CATALOG
+  async seedDefaultCatalog(): Promise<{ categoriesCount: number; productsCount: number }> {
+    try {
+      for (const cat of LOVE_AND_HAPPY_CATEGORIES) {
+        await sql`
+          INSERT INTO categories (id, name)
+          VALUES (${cat.id}, ${cat.name})
+          ON CONFLICT (name) DO NOTHING
+        `.catch(() => {});
+      }
+      for (const prod of LOVE_AND_HAPPY_PRODUCTS) {
+        await sql`
+          INSERT INTO products (id, name, description, category, gst_rate, hsn_code, selling_price)
+          VALUES (
+            ${prod.id}, ${prod.name}, ${prod.description}, ${prod.category},
+            ${prod.gst_rate}, ${prod.hsn_code}, ${prod.selling_price}
+          )
+          ON CONFLICT DO NOTHING
+        `.catch(() => {});
+      }
+    } catch (err) {
+      console.warn('seedDefaultCatalog error:', err);
+    }
+    return {
+      categoriesCount: LOVE_AND_HAPPY_CATEGORIES.length,
+      productsCount: LOVE_AND_HAPPY_PRODUCTS.length,
+    };
+  },
+
   // CATEGORIES
   async listCategories(): Promise<Category[]> {
-    const rows = await sql`SELECT * FROM categories ORDER BY name ASC`;
-    return rows as Category[];
+    try {
+      const rows = await sql`SELECT * FROM categories ORDER BY name ASC`;
+      if (rows && rows.length > 0) return rows as Category[];
+      await this.seedDefaultCatalog().catch(() => {});
+      const seeded = await sql`SELECT * FROM categories ORDER BY name ASC`.catch(() => []);
+      if (seeded && seeded.length > 0) return seeded as Category[];
+      return LOVE_AND_HAPPY_CATEGORIES;
+    } catch {
+      return LOVE_AND_HAPPY_CATEGORIES;
+    }
   },
 
   async addCategory(name: string): Promise<Category> {
@@ -62,8 +100,16 @@ export const dbStore = {
 
   // PRODUCTS
   async listProducts(): Promise<Product[]> {
-    const rows = await sql`SELECT * FROM products ORDER BY name ASC`;
-    return rows as Product[];
+    try {
+      const rows = await sql`SELECT * FROM products ORDER BY name ASC`;
+      if (rows && rows.length > 0) return rows as Product[];
+      await this.seedDefaultCatalog().catch(() => {});
+      const seeded = await sql`SELECT * FROM products ORDER BY name ASC`.catch(() => []);
+      if (seeded && seeded.length > 0) return seeded as Product[];
+      return LOVE_AND_HAPPY_PRODUCTS;
+    } catch {
+      return LOVE_AND_HAPPY_PRODUCTS;
+    }
   },
 
   async getProduct(id: string): Promise<Product | null> {
