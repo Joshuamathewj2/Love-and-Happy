@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { ArrowLeft, Clock, MessageSquare, FileText, Eye, IndianRupee, Trash2, RefreshCw } from "lucide-react";
 import { fetchAdvanceOrders, removeAdvanceOrder } from "@/app/pos/actions";
 import { AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
+import { supabase } from "@/lib/supabaseClient";
 
 type FilterTab = "ALL" | AdvanceOrderStatus;
 
@@ -52,6 +53,25 @@ export default function AdminAdvanceOrdersPage() {
       router.refresh();
     } catch (err: any) {
       alert(`Could not delete advance order: ${err?.message || "Please try again."}`);
+    }
+  };
+
+  const handleStatusChange = async (orderId: string, newStatus: string) => {
+    setAdvanceOrders((prev) =>
+      prev.map((ord) => (ord.id === orderId ? { ...ord, status: newStatus as AdvanceOrderStatus } : ord))
+    );
+
+    const { error } = await supabase
+      .from("advance_orders")
+      .update({
+        status: newStatus,
+      })
+      .eq("id", orderId);
+
+    if (error) {
+      console.error("Failed to update status:", error);
+      alert(`Error updating status: ${error.message}`);
+      loadData();
     }
   };
 
@@ -255,20 +275,32 @@ export default function AdminAdvanceOrdersPage() {
 
                       {/* Status */}
                       <td className="w-[12%] text-center px-4 py-3 align-middle">
-                        <div className="flex flex-col items-center justify-center gap-1">
-                          <span
-                            className={`inline-block px-3 py-0.5 rounded-full text-xs font-semibold border ${
+                        <div className="relative inline-block w-full max-w-[150px] mx-auto">
+                          <select
+                            value={statusUpper}
+                            onChange={(e) => handleStatusChange(a.id, e.target.value)}
+                            className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
                               statusUpper === "COMPLETED"
-                                ? "bg-emerald-50 text-emerald-700 border-emerald-300"
+                                ? "bg-emerald-50 text-emerald-800 border-emerald-300 ring-1 ring-pink-300"
                                 : statusUpper === "READY"
-                                ? "bg-blue-50 text-blue-700 border-blue-300"
+                                ? "bg-blue-50 text-blue-800 border-blue-300 ring-1 ring-pink-300"
                                 : statusUpper === "CANCELLED"
-                                ? "bg-rose-50 text-rose-700 border-rose-300"
-                                : "bg-amber-50 text-amber-700 border-amber-300"
+                                ? "bg-rose-50 text-rose-800 border-rose-300"
+                                : "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-pink-300"
                             }`}
                           >
-                            {statusUpper}
-                          </span>
+                            <option value="PENDING" className="bg-white text-gray-900 font-semibold">PENDING</option>
+                            <option value="READY" className="bg-white text-gray-900 font-semibold">READY</option>
+                            <option value="COMPLETED" className="bg-white text-gray-900 font-semibold">COMPLETED</option>
+                            <option value="CANCELLED" className="bg-white text-gray-900 font-semibold">CANCELLED</option>
+                          </select>
+                          
+                          {/* Chevron Down Icon */}
+                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </div>
                         </div>
                       </td>
 

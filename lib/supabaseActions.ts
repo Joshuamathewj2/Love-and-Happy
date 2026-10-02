@@ -235,32 +235,66 @@ export async function supabaseAddProduct(product: Omit<Product, 'created_at'>): 
 
 export async function supabaseUpdateProduct(id: string, patch: Partial<Product>): Promise<Product | null> {
   try {
+    // Sanitize payload to only valid columns on products table
+    const productPatch: Record<string, any> = {};
+    if (patch.name !== undefined) productPatch.name = patch.name?.trim();
+    if (patch.description !== undefined) productPatch.description = patch.description?.trim() || null;
+    if (patch.category !== undefined) productPatch.category = patch.category?.trim() || 'General';
+    if (patch.gst_rate !== undefined) productPatch.gst_rate = Number(patch.gst_rate) || 0;
+    if (patch.hsn_code !== undefined) productPatch.hsn_code = patch.hsn_code?.trim() || null;
+    if (patch.selling_price !== undefined) productPatch.selling_price = Number(patch.selling_price) || 0;
+    if (patch.price !== undefined) productPatch.price = Number(patch.price) || 0;
+    if (patch.offer_price !== undefined) productPatch.offer_price = patch.offer_price != null ? Number(patch.offer_price) : null;
+    if (patch.purchase_price !== undefined) productPatch.purchase_price = patch.purchase_price != null ? Number(patch.purchase_price) : null;
+    if (patch.sku !== undefined) productPatch.sku = patch.sku?.trim() || null;
+    if (patch.stock_quantity !== undefined) productPatch.stock_quantity = Number(patch.stock_quantity) || 0;
+    if (patch.low_stock_alert !== undefined) productPatch.low_stock_alert = Number(patch.low_stock_alert) || 0;
+    if (patch.unit !== undefined) productPatch.unit = patch.unit || null;
+    if (patch.unit_label !== undefined) productPatch.unit_label = patch.unit_label || null;
+    if (patch.item_type !== undefined) productPatch.item_type = patch.item_type || 'service';
+    if (patch.image_url !== undefined) productPatch.image_url = patch.image_url?.trim() || null;
+    if (patch.is_active !== undefined) productPatch.is_active = Boolean(patch.is_active);
+
     const { data, error } = await supabase
       .from('products')
-      .update(patch)
+      .update(productPatch)
       .eq('id', id)
       .select()
       .single();
 
+    if (error) {
+      console.error('Supabase Update Error Details:', {
+        code: error.code,
+        message: error.message,
+        details: error.details,
+        hint: error.hint,
+      });
+      throw error;
+    }
+
     try {
       const catalogPatch: Record<string, any> = {};
-      if (patch.name !== undefined) catalogPatch.name = patch.name;
-      if (patch.category !== undefined) catalogPatch.category = patch.category;
-      if (patch.selling_price !== undefined) catalogPatch.regular_price = patch.selling_price;
-      if (patch.offer_price !== undefined) catalogPatch.member_price = patch.offer_price;
-      if (patch.description !== undefined) catalogPatch.details = patch.description;
-      if (patch.gst_rate !== undefined) catalogPatch.gst_rate = patch.gst_rate;
-      if (patch.hsn_code !== undefined) catalogPatch.hsn_code = patch.hsn_code;
+      if (patch.name !== undefined) catalogPatch.name = patch.name?.trim();
+      if (patch.category !== undefined) catalogPatch.category = patch.category?.trim() || 'General';
+      if (patch.selling_price !== undefined) catalogPatch.regular_price = Number(patch.selling_price) || 0;
+      if (patch.offer_price !== undefined) catalogPatch.member_price = Number(patch.offer_price) || null;
+      if (patch.description !== undefined) catalogPatch.details = patch.description?.trim() || null;
+      if (patch.gst_rate !== undefined) catalogPatch.gst_rate = Number(patch.gst_rate) || 0;
+      if (patch.hsn_code !== undefined) catalogPatch.hsn_code = patch.hsn_code?.trim() || null;
 
       if (Object.keys(catalogPatch).length > 0) {
         await supabase.from('catalog_items').update(catalogPatch).eq('id', id);
       }
     } catch (_) {}
 
-    if (error) throw error;
     return data as Product;
-  } catch (err) {
-    console.error('[Supabase] updateProduct failed:', err);
+  } catch (err: any) {
+    console.error('Supabase Update Error Details:', {
+      code: err?.code,
+      message: err?.message,
+      details: err?.details,
+      hint: err?.hint,
+    });
     throw err;
   }
 }

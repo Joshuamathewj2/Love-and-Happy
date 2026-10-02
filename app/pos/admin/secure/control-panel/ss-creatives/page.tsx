@@ -1355,6 +1355,20 @@ export default function POSBilling() {
     }
   };
 
+  const handleStatusChange = async (orderId: string, newStatus: string) => {
+    try {
+      setAdvanceOrders((prev) =>
+        prev.map((ord) => (ord.id === orderId ? { ...ord, status: newStatus as AdvanceOrderStatus } : ord))
+      );
+      await setAdvanceOrderStatus(orderId, newStatus as AdvanceOrderStatus);
+      await fetchData();
+    } catch (err: any) {
+      console.error("Status update failed:", err);
+      alert(`Could not update status: ${err?.message || "Please try again."}`);
+      await fetchData();
+    }
+  };
+
   // Completes and saves the sale to the database. Returns the created order
   // (or null if validation/creation failed). WhatsApp sharing is a separate,
   // Completes and saves the sale to the database with instant optimistic updates.
@@ -4735,18 +4749,32 @@ export default function POSBilling() {
                         {a.delivery_date ? new Date(a.delivery_date).toLocaleDateString("en-IN") : "—"}
                       </td>
                       <td className="w-[12%] text-center px-4 py-3 align-middle">
-                        <div className="flex flex-col items-center justify-center gap-1">
-                          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold border ${statusStyles[a.status]}`}>
-                            {a.status || "PENDING"}
-                          </span>
-                          {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
-                            <button
-                              onClick={() => toggleAdvanceReady(a)}
-                              className="text-[10px] font-bold text-blue-600 hover:underline tracking-tight uppercase cursor-pointer"
-                            >
-                              {a.status === "READY" ? "Mark Pending" : "Mark Ready"}
-                            </button>
-                          )}
+                        <div className="relative inline-block w-full max-w-[150px] mx-auto">
+                          <select
+                            value={a.status || "PENDING"}
+                            onChange={(e) => handleStatusChange(a.id, e.target.value)}
+                            className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                              a.status === "COMPLETED"
+                                ? "bg-emerald-50 text-emerald-800 border-emerald-300 ring-1 ring-pink-300"
+                                : a.status === "READY"
+                                ? "bg-blue-50 text-blue-800 border-blue-300 ring-1 ring-pink-300"
+                                : a.status === "CANCELLED"
+                                ? "bg-rose-50 text-rose-800 border-rose-300"
+                                : "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-pink-300"
+                            }`}
+                          >
+                            <option value="PENDING" className="bg-white text-gray-900 font-semibold">PENDING</option>
+                            <option value="READY" className="bg-white text-gray-900 font-semibold">READY</option>
+                            <option value="COMPLETED" className="bg-white text-gray-900 font-semibold">COMPLETED</option>
+                            <option value="CANCELLED" className="bg-white text-gray-900 font-semibold">CANCELLED</option>
+                          </select>
+                          
+                          {/* Chevron Down Icon */}
+                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </div>
                         </div>
                       </td>
                       <td className="w-[17%] text-right pr-4 py-3 align-middle"><div className="flex items-center justify-end gap-1 flex-nowrap">
