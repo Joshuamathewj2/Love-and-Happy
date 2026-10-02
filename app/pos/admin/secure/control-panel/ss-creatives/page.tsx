@@ -1147,9 +1147,9 @@ export default function POSBilling() {
         deposit,
         balance: Math.max(0, grandTotal - deposit),
       });
-    } catch (err) {
-      console.error("Failed to save advance order:", err);
-      alert("Could not save the advance order. Please try again.");
+    } catch (err: any) {
+      console.error("SUPABASE SAVE ADVANCE ORDER ERROR:", err);
+      alert(`Could not save the advance order: ${err?.message || "Please try again."}`);
     } finally {
       setIsSavingAdvance(false);
     }
@@ -1258,9 +1258,9 @@ export default function POSBilling() {
       } catch (mapErr) {
         console.error("Could not open completion modal:", mapErr);
       }
-    } catch (err) {
-      console.error("Failed to finalize advance order:", err);
-      alert("Could not finalize the advance order. Please try again.");
+    } catch (err: any) {
+      console.error("SUPABASE FINALIZE ADVANCE ORDER ERROR:", err);
+      alert(`Could not finalize the advance order: ${err?.message || "Please try again."}`);
     } finally {
       setIsFinalizing(false);
     }
@@ -1482,8 +1482,14 @@ export default function POSBilling() {
 
       return mappedOrder;
     } catch (err: any) {
-      console.error("Failed to complete sale:", err);
-      alert("An error occurred while saving the sale. Please try again.");
+      console.error("SUPABASE SAVE SALE ERROR:", {
+        message: err?.message,
+        details: err?.details,
+        hint: err?.hint,
+        code: err?.code,
+        error: err,
+      });
+      alert(`Failed to save sale: ${err?.message || "Unknown error"}`);
       return null;
     } finally {
       setIsSubmittingOrder(false);
@@ -1657,9 +1663,9 @@ export default function POSBilling() {
         setExpCategory(category);
         setExpCustomCategory("");
       }
-    } catch (err) {
-      console.error("Error adding expense:", err);
-      alert("Could not save the expense. Please try again.");
+    } catch (err: any) {
+      console.error("SUPABASE ADD EXPENSE ERROR:", err);
+      alert(`Could not save the expense: ${err?.message || "Please try again."}`);
     } finally {
       setIsSavingExpense(false);
     }
