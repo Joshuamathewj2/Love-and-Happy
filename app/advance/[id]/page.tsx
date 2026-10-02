@@ -136,7 +136,7 @@ export default async function AdvanceReceiptPage({
           <div className="sm:text-right space-y-1.5 shrink-0">
             <div>
               <span className="text-lg font-bold tracking-tight text-zinc-900 uppercase">
-                Advance Receipt
+                Advance Deposit Receipt
               </span>
               <p className="text-xs font-mono text-zinc-500">#{advance.id}</p>
             </div>

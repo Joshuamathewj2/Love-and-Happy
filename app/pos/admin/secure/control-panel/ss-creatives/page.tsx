@@ -416,7 +416,7 @@ export default function POSBilling() {
     "fixed",
   );
   const [deliveryFee, setDeliveryFee] = useState<number>(0);
-  const [cashReceived, setCashReceived] = useState<number>(0);
+  const [cashReceived, setCashReceived] = useState<number | string>("");
   const [paymentMode, setPaymentMode] = useState<OrderPaymentMode>("CASH");
   // Split payment: cash + gpay portions (only used when paymentMode === "SPLIT")
   const [splitCash, setSplitCash] = useState<number>(0);
@@ -1026,6 +1026,7 @@ export default function POSBilling() {
       ? netInclusive - netInclusive / (1 + gstPercentage / 100)
       : 0;
   const grandTotal = netInclusive + deliveryFee;
+  const cashReceivedNum = Number(cashReceived) || 0;
 
   // Suggest a GST % from the products currently in the cart (their per-product
   // default rate). Used to pre-fill the changeable GST field when a GST invoice
@@ -1068,6 +1069,10 @@ export default function POSBilling() {
   };
 
   const openAdvanceSaveModal = () => {
+    if (!customerName || customerName.trim() === "") {
+      alert("Please enter the customer name before saving an advance order.");
+      return;
+    }
     if (!customerPhone || customerPhone.length !== 10) {
       alert("Please enter a valid 10-digit mobile contact number before saving an advance order.");
       return;
@@ -1079,22 +1084,38 @@ export default function POSBilling() {
       alert("Please ensure all items have a valid name and price greater than 0 before saving an advance order.");
       return;
     }
-    setAdvDeposit("");
+    // Prefill deposit amount if cashier entered a partial amount in the billing panel
+    let initialDeposit: number | "" = "";
+    if (paymentMode === "SPLIT") {
+      const splitTotal = (Number(splitCash) || 0) + (Number(splitGpay) || 0);
+      if (splitTotal > 0 && splitTotal < grandTotal) initialDeposit = splitTotal;
+    } else {
+      if (cashReceivedNum > 0 && cashReceivedNum < grandTotal) initialDeposit = cashReceivedNum;
+    }
+    setAdvDeposit(initialDeposit);
     setAdvDeliveryDate("");
     setAdvNotes("");
-    setAdvDepositPaymentMode(paymentMode);
+    setAdvDepositPaymentMode(paymentMode === "SPLIT" ? "CASH" : paymentMode);
     setShowAdvanceSaveModal(true);
   };
 
   const saveAdvanceOrder = async () => {
     if (isSavingAdvance) return;
+    if (!customerName || customerName.trim() === "") {
+      alert("Customer name is required for advance orders.");
+      return;
+    }
+    if (!customerPhone || customerPhone.length !== 10) {
+      alert("A valid 10-digit customer phone number is required for advance orders.");
+      return;
+    }
     const deposit = Number(advDeposit) || 0;
     if (deposit <= 0) {
       alert("Deposit amount must be greater than 0.");
       return;
     }
-    if (deposit > grandTotal) {
-      alert("Deposit cannot exceed the grand total. Use 'Complete Sale' for full payment.");
+    if (deposit >= grandTotal) {
+      alert("Deposit cannot equal or exceed the grand total. Use Complete Sale for full payment.");
       return;
     }
 
@@ -1103,7 +1124,7 @@ export default function POSBilling() {
     try {
       await createAdvanceOrder({
         advanceOrderId: advId,
-        customerName: customerName || "Guest",
+        customerName: customerName.trim() || "Guest",
         customerPhone,
         customerAddress: customerAddress || null,
         subtotal,
@@ -1122,7 +1143,7 @@ export default function POSBilling() {
       });
 
       // Capture receipt details before clearing the form.
-      const receiptCustomerName = customerName || "Guest";
+      const receiptCustomerName = customerName.trim() || "Guest";
       const receiptCustomerPhone = customerPhone;
 
       // Reset billing form.
@@ -1132,10 +1153,43 @@ export default function POSBilling() {
       setCustomerAddress("");
       setDiscountValue(0);
       setDeliveryFee(0);
-      setCashReceived(0);
+      setCashReceived("");
       setSplitCash(0);
       setSplitGpay(0);
       setShowAdvanceSaveModal(false);
+
+      // Optimistically add to advance orders state for instant display without waiting for network
+      const newAdvOrder: AdvanceOrderWithRelations = {
+        id: advId,
+        customer_id: "",
+        customer_name: receiptCustomerName,
+        customer_phone: receiptCustomerPhone,
+        customer_address: customerAddress || null,
+        status: "PENDING",
+        subtotal: Number(subtotal) || 0,
+        total_amount: Number(grandTotal) || 0,
+        deposit_amount: Number(deposit) || 0,
+        deposit_payment_mode: advDepositPaymentMode,
+        delivery_date: advDeliveryDate || null,
+        notes: advNotes.trim() || null,
+        finalized_order_id: null,
+        finalized_at: null,
+        cancelled_at: null,
+        created_at: new Date().toISOString(),
+        items: items.map((i, idx) => ({
+          id: `ai-${advId}-${idx}`,
+          advance_order_id: advId,
+          product_id: i.product_id || null,
+          snapshot_name: i.name,
+          snapshot_desc: i.desc || null,
+          snapshot_price: Number(i.price) || 0,
+          quantity: Number(i.qty) || 1,
+        })),
+      };
+      setAdvanceOrders((prev) => [newAdvOrder, ...prev]);
+
+      // Route directly into Advance Orders management screen
+      setActiveTab("advance");
       await fetchData();
 
       // Show a shareable receipt modal (Print / WhatsApp / New Sale).
@@ -1350,7 +1404,7 @@ export default function POSBilling() {
     if (
       localSubtotal > MAX_LIMIT ||
       localGrandTotal > MAX_LIMIT ||
-      cashReceived > MAX_LIMIT ||
+      Number(cashReceived) > MAX_LIMIT ||
       deliveryFee > MAX_LIMIT
     ) {
       alert(
@@ -1380,16 +1434,19 @@ export default function POSBilling() {
     }
 
     // Resolve the amount tendered and the split breakdown per payment mode.
-    let receivedAmount = cashReceived;
+    let receivedAmount = localGrandTotal;
     let splitCashVal = 0;
     let splitGpayVal = 0;
     if (paymentMode === "SPLIT") {
       splitCashVal = Number(splitCash) || 0;
       splitGpayVal = Number(splitGpay) || 0;
       receivedAmount = splitCashVal + splitGpayVal;
-    } else if (paymentMode === "GPAY") {
-      // GPay is an exact digital transfer — no change to return.
-      receivedAmount = cashReceived > 0 ? cashReceived : localGrandTotal;
+    } else {
+      if (cashReceived !== "" && !isNaN(Number(cashReceived))) {
+        receivedAmount = Number(cashReceived);
+      } else {
+        receivedAmount = localGrandTotal;
+      }
     }
 
     setIsSubmittingOrder(true);
@@ -1473,7 +1530,7 @@ export default function POSBilling() {
       setItems([{ id: "1", name: "", desc: "", price: 0, qty: 1 }]);
       setDiscountValue(0);
       setDeliveryFee(0);
-      setCashReceived(0);
+      setCashReceived("");
       setSplitCash(0);
       setSplitGpay(0);
       setPaymentMode("CASH");
@@ -1793,6 +1850,13 @@ export default function POSBilling() {
     avgMonthRevenue,
     todayOrders,
     todayRevenue,
+    todayAdvanceOrders,
+    todayAdvanceDeposits,
+    todayCashFlow,
+    analyticsFilteredAdvanceOrders,
+    periodAdvanceDeposits,
+    pendingAdvanceOrders,
+    advanceOutstandingBalance,
     todayOrdersCount,
     todayOnlineOrdersCount,
     todayOfflineOrdersCount,
@@ -2108,6 +2172,52 @@ export default function POSBilling() {
         ? Object.entries(categorySales).sort((a, b) => b[1] - a[1])[0][0]
         : "None";
     const topProduct = topItems[0]?.name || "None";
+
+    // Advance Orders Metrics for Analytics
+    const todayAdvanceOrders = advanceOrders.filter((a) => {
+      if (analyticsSearchPhone) {
+        const q = analyticsSearchPhone.toLowerCase();
+        const matchPhone = (a.customer_phone || "").includes(q);
+        const matchId = (a.id || "").toLowerCase().includes(q);
+        const matchName = (a.customer_name || "").toLowerCase().includes(q);
+        if (!matchPhone && !matchId && !matchName) return false;
+      }
+      const d = new Date(a.created_at);
+      return (
+        d.getDate() === now.getDate() &&
+        d.getMonth() === now.getMonth() &&
+        d.getFullYear() === now.getFullYear()
+      );
+    });
+    const todayAdvanceDeposits = todayAdvanceOrders.reduce(
+      (sum, a) => sum + (Number(a.deposit_amount) || 0),
+      0,
+    );
+    const todayCashFlow = todayRevenue + todayAdvanceDeposits;
+
+    const analyticsFilteredAdvanceOrders = advanceOrders.filter((a) => {
+      if (analyticsSearchPhone) {
+        const q = analyticsSearchPhone.toLowerCase();
+        const matchPhone = (a.customer_phone || "").includes(q);
+        const matchId = (a.id || "").toLowerCase().includes(q);
+        const matchName = (a.customer_name || "").toLowerCase().includes(q);
+        if (!matchPhone && !matchId && !matchName) return false;
+      }
+      return isDateInPeriod(a.created_at, analyticsPeriod, analyticsStartDate, analyticsEndDate);
+    });
+    const periodAdvanceDeposits = analyticsFilteredAdvanceOrders.reduce(
+      (sum, a) => sum + (Number(a.deposit_amount) || 0),
+      0,
+    );
+
+    const pendingAdvanceOrders = advanceOrders.filter(
+      (a) => a.status === "PENDING" || a.status === "READY",
+    );
+    const advanceOutstandingBalance = pendingAdvanceOrders.reduce(
+      (sum, a) => sum + Math.max(0, (Number(a.total_amount) || 0) - (Number(a.deposit_amount) || 0)),
+      0,
+    );
+
     return {
       analyticsFilteredOrders,
       totalOrdersCount,
@@ -2131,6 +2241,13 @@ export default function POSBilling() {
       avgMonthRevenue,
       todayOrders,
       todayRevenue,
+      todayAdvanceOrders,
+      todayAdvanceDeposits,
+      todayCashFlow,
+      analyticsFilteredAdvanceOrders,
+      periodAdvanceDeposits,
+      pendingAdvanceOrders,
+      advanceOutstandingBalance,
       todayOrdersCount,
       todayOnlineOrdersCount,
       todayOfflineOrdersCount,
@@ -2149,6 +2266,7 @@ export default function POSBilling() {
     };
   }, [
     orders,
+    advanceOrders,
     analyticsSearchPhone,
     analyticsPeriod,
     analyticsStartDate,
@@ -3074,39 +3192,56 @@ export default function POSBilling() {
                   </>
                 )}
 
-                <div className="flex justify-between items-center text-xs">
-                  <span className="font-semibold text-gray-600">
-                    {completedBillData.paymentMode === "GPAY"
-                      ? "Paid via GPay"
-                      : completedBillData.paymentMode === "SPLIT"
-                        ? "Total Received"
-                        : "Amount Received"}
-                  </span>
-                  <span className="text-sm font-black text-black">
-                    ₹
-                    {(
-                      completedBillData.cashReceived ||
-                      completedBillData.grandTotal
-                    ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                  </span>
-                </div>
+                {(() => {
+                  const billActualReceived =
+                    typeof completedBillData.cashReceived === "number"
+                      ? completedBillData.cashReceived
+                      : completedBillData.grandTotal;
+                  const billBalDue =
+                    billActualReceived < completedBillData.grandTotal
+                      ? completedBillData.grandTotal - billActualReceived
+                      : 0;
+                  const billChange =
+                    billActualReceived > completedBillData.grandTotal
+                      ? billActualReceived - completedBillData.grandTotal
+                      : 0;
+                  return (
+                    <>
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-semibold text-gray-600">
+                          {completedBillData.paymentMode === "GPAY"
+                            ? "Paid via GPay"
+                            : completedBillData.paymentMode === "SPLIT"
+                              ? "Total Received"
+                              : "Actual Amount Received"}
+                        </span>
+                        <span className="text-sm font-black text-black">
+                          ₹{billActualReceived.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                        </span>
+                      </div>
 
-                {/* Balance Returned Box — cash change only */}
-                {completedBillData.paymentMode !== "GPAY" && (
-                  <div className="bg-[#F4F4F5] border border-[#E4E4E7] rounded-lg p-3 sm:p-3.5 flex justify-between items-center mt-1">
-                    <span className="text-xs font-bold text-[#007A87]">
-                      Balance Returned
-                    </span>
-                    <span className="text-base sm:text-lg font-black text-[#007A87]">
-                      ₹
-                      {Math.max(
-                        0,
-                        (completedBillData.cashReceived || 0) -
-                          completedBillData.grandTotal,
-                      ).toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                )}
+                      {billBalDue > 0 ? (
+                        <div className="bg-[#FFFBEB] border border-[#F59E0B]/50 rounded-lg p-3 sm:p-3.5 flex justify-between items-center mt-1">
+                          <span className="text-xs font-bold text-[#92400E]">
+                            Outstanding Balance Due
+                          </span>
+                          <span className="text-base sm:text-lg font-black text-[#B45309]">
+                            ₹{billBalDue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="bg-[#F0FDF4] border border-[#22C55E]/40 rounded-lg p-3 sm:p-3.5 flex justify-between items-center mt-1">
+                          <span className="text-xs font-bold text-[#15803D]">
+                            Change Returned
+                          </span>
+                          <span className="text-base sm:text-lg font-black text-[#16A34A]">
+                            ₹{billChange.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                          </span>
+                        </div>
+                      )}
+                    </>
+                  );
+                })()}
               </div>
 
               {/* Action Buttons Bar */}
@@ -4020,64 +4155,93 @@ export default function POSBilling() {
                           <input
                             type="number"
                             className="w-full bg-white border border-black/10 focus:border-[#0097A7] rounded-lg px-3 py-2 text-base font-bold text-[#000000] placeholder:text-[#000000] focus:outline-none transition-colors"
-                            value={cashReceived || ""}
+                            value={cashReceived}
                             onWheel={(e) => e.currentTarget.blur()}
                             onChange={(e) =>
-                              setCashReceived(parseFloat(e.target.value) || 0)
+                              setCashReceived(e.target.value)
                             }
                             placeholder="0.00"
                           />
                         </div>
                       )}
 
-                      {/* Change Return — cash only */}
-                      {paymentMode === "CASH" && cashReceived > 0 && (
-                        <div className="flex justify-between items-center bg-white border border-black/10 rounded-lg p-3 text-xs">
-                          <span className="font-bold text-[#000000] uppercase tracking-[0.05em]">
-                            Change Return
-                          </span>
-                          <span
-                            className={`font-black text-sm ${cashReceived >= grandTotal ? "text-[#00A86B]" : "text-[#27272A]"}`}
-                          >
-                            ₹
-                            {Math.max(
-                              0,
-                              cashReceived - grandTotal,
-                            ).toLocaleString(undefined, {
-                              minimumFractionDigits: 2,
-                            })}
-                          </span>
-                        </div>
+                      {/* Dynamic Change Return / Unpaid Balance Due */}
+                      {paymentMode !== "SPLIT" && cashReceived !== "" && cashReceivedNum > 0 && (
+                        cashReceivedNum >= grandTotal ? (
+                          <div className="flex justify-between items-center bg-[#F0FDF4] border border-[#22C55E]/40 rounded-xl p-3 text-xs shadow-xs">
+                            <span className="font-bold text-[#15803D] uppercase tracking-[0.05em]">
+                              Change Return
+                            </span>
+                            <span className="font-black text-sm text-[#16A34A]">
+                              ₹{(cashReceivedNum - grandTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        ) : (
+                          <div className="bg-[#FFFBEB] border border-[#F59E0B]/50 rounded-xl p-3 text-xs shadow-xs">
+                            <div className="flex justify-between items-center">
+                              <span className="font-black text-[#92400E] uppercase tracking-[0.05em]">
+                                Unpaid Balance Due
+                              </span>
+                              <span className="font-black text-sm text-[#B45309]">
+                                ₹{(grandTotal - cashReceivedNum).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                            <p className="text-[10px] text-[#B45309] font-medium mt-1">
+                              Partial payment entered — save as an Advance Order to track the remaining balance.
+                            </p>
+                          </div>
+                        )
                       )}
 
-                      {/* Complete Sale — saves the order to the database */}
-                      <button
-                        onClick={() => completeSale()}
-                        disabled={isSubmittingOrder}
-                        className={`w-full mt-2 bg-[#0097A7] hover:bg-[#27272A] text-white py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 transition-all active:scale-[0.98] shadow-[0_4px_14px_rgba(63,63,70,0.35)] ${
-                          isSubmittingOrder
-                            ? "opacity-60 cursor-not-allowed"
-                            : "cursor-pointer"
-                        }`}
-                      >
-                        {isSubmittingOrder ? (
-                          <>
-                            <Loader2 className="w-4 h-4 animate-spin" />
-                            <span>Processing Sale...</span>
-                          </>
-                        ) : (
-                          <>
+                      {/* Complete Sale — disabled or warned if partial payment entered in CASH mode */}
+                      {((paymentMode !== "SPLIT" && cashReceived !== "" && cashReceivedNum > 0 && cashReceivedNum < grandTotal) ||
+                        (paymentMode === "SPLIT" && (Number(splitCash) || 0) + (Number(splitGpay) || 0) > 0 && (Number(splitCash) || 0) + (Number(splitGpay) || 0) < grandTotal)) ? (
+                        <div className="mt-2 space-y-1">
+                          <button
+                            disabled
+                            className="w-full bg-zinc-200 text-zinc-400 py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 cursor-not-allowed opacity-75"
+                          >
                             <Check className="w-4 h-4" />
-                            <span>Complete Sale</span>
-                          </>
-                        )}
-                      </button>
+                            <span>Complete Sale (Full Payment Required)</span>
+                          </button>
+                          <p className="text-[10px] text-amber-700 font-semibold text-center">
+                            Full payment not received — use "Save as Advance Order" below.
+                          </p>
+                        </div>
+                      ) : (
+                        <button
+                          onClick={() => completeSale()}
+                          disabled={isSubmittingOrder}
+                          className={`w-full mt-2 bg-[#0097A7] hover:bg-[#27272A] text-white py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 transition-all active:scale-[0.98] shadow-[0_4px_14px_rgba(63,63,70,0.35)] ${
+                            isSubmittingOrder
+                              ? "opacity-60 cursor-not-allowed"
+                              : "cursor-pointer"
+                          }`}
+                        >
+                          {isSubmittingOrder ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              <span>Processing Sale...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Check className="w-4 h-4" />
+                              <span>Complete Sale</span>
+                            </>
+                          )}
+                        </button>
+                      )}
 
-                      {/* Save as Advance Order — partial payment hold, not counted as revenue */}
+                      {/* Save as Advance Order */}
                       <button
                         onClick={openAdvanceSaveModal}
                         disabled={isSubmittingOrder}
-                        className={`w-full mt-2 bg-white border-2 border-[#F59E0B] hover:bg-[#FEF3C7] text-[#B45309] py-3 rounded-lg font-black text-[10px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${
+                        className={`w-full mt-2 border-2 ${
+                          (paymentMode !== "SPLIT" && cashReceived !== "" && cashReceivedNum > 0 && cashReceivedNum < grandTotal) ||
+                          (paymentMode === "SPLIT" && (Number(splitCash) || 0) + (Number(splitGpay) || 0) > 0 && (Number(splitCash) || 0) + (Number(splitGpay) || 0) < grandTotal)
+                            ? "bg-amber-50 border-amber-400 hover:bg-amber-100 text-amber-800 shadow-sm"
+                            : "bg-white border-[#F59E0B] hover:bg-[#FEF3C7] text-[#B45309]"
+                        } py-3 rounded-lg font-black text-[10px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${
                           isSubmittingOrder ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
                         }`}
                       >
@@ -4497,14 +4661,14 @@ export default function POSBilling() {
 
             {/* Rows */}
             <div className="bg-white border border-black/10 rounded-xl overflow-hidden">
-              <div className="hidden md:grid grid-cols-[1.1fr_1.3fr_1.5fr_1.5fr_0.9fr_1.1fr_1.4fr] gap-3 px-4 py-3 border-b border-black/10 text-[10px] font-black uppercase tracking-wider text-[#007A87] bg-[#F9FAFB]">
+              <div className="hidden md:grid grid-cols-[1.5fr_1.5fr_2fr_2fr_1.2fr_1.3fr_1.8fr] gap-2 px-4 py-3 border-b border-black/10 text-[10px] font-black uppercase tracking-wider text-[#007A87] bg-[#F9FAFB] items-center">
                 <span>Deposit ID</span>
                 <span>Customer</span>
                 <span>Product</span>
                 <span>Total / Paid / Balance</span>
-                <span>Delivery</span>
-                <span>Status</span>
-                <span className="text-right">Actions</span>
+                <span className="text-center justify-self-center">Delivery</span>
+                <span className="text-center justify-self-center">Status</span>
+                <span className="text-right justify-self-end">Actions</span>
               </div>
               {(() => {
                 const q = advSearchQuery.trim().toLowerCase();
@@ -4536,10 +4700,10 @@ export default function POSBilling() {
                     CANCELLED: "bg-[#FEE2E2] text-[#991B1B] border-[#DC2626]/30",
                   };
                   return (
-                    <div key={a.id} className="grid grid-cols-1 md:grid-cols-[1.1fr_1.3fr_1.5fr_1.5fr_0.9fr_1.1fr_1.4fr] gap-3 px-4 py-3 border-b border-black/5 items-center text-xs hover:bg-[#FAFAFA]">
+                    <div key={a.id} className="grid grid-cols-1 md:grid-cols-[1.5fr_1.5fr_2fr_2fr_1.2fr_1.3fr_1.8fr] gap-2 px-4 py-3 border-b border-black/5 items-center text-xs hover:bg-[#FAFAFA]">
                       <div>
-                        <p className="font-mono font-black text-[11px] text-black">{a.id}</p>
-                        <p className="text-[9px] font-bold text-[#007A87]">{new Date(a.created_at).toLocaleDateString()}</p>
+                        <p className="text-xs font-bold text-slate-950 font-mono">{a.id}</p>
+                        <p className="text-[11px] text-slate-400">{new Date(a.created_at).toLocaleDateString()}</p>
                       </div>
                       <div>
                         <p className="font-black text-black">{a.customer_name}</p>
@@ -4555,26 +4719,28 @@ export default function POSBilling() {
                           <p className="text-[10px] text-[#007A87]">+{a.items.length - 2} more</p>
                         )}
                       </div>
-                      <div className="text-[11px]">
-                        <p className="font-bold text-black">Total: ₹{Number(a.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                        <p className="text-[#16A34A] font-bold">Paid: ₹{Number(a.deposit_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                        <p className="text-[#DC2626] font-bold">Balance: ₹{bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                      <div className="space-y-0.5">
+                        <p className="text-xs font-bold text-slate-900">Total: ₹{Number(a.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                        <p className="text-xs font-semibold text-emerald-600">Paid: ₹{Number(a.deposit_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                        <p className="text-xs font-semibold text-rose-600">Balance: ₹{bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                       </div>
-                      <div className="text-[11px] font-bold text-[#007A87]">
-                        {a.delivery_date ? new Date(a.delivery_date).toLocaleDateString() : "—"}
+                      <div className="text-center justify-self-center font-medium text-slate-700 text-xs">
+                        {a.delivery_date ? new Date(a.delivery_date).toLocaleDateString("en-IN") : "—"}
                       </div>
-                      <div>
-                        <span className={`inline-block px-2 py-1 rounded-md text-[9px] font-black uppercase tracking-wider border ${statusStyles[a.status]}`}>
-                          {a.status}
-                        </span>
-                        {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
-                          <button
-                            onClick={() => toggleAdvanceReady(a)}
-                            className="block mt-1 text-[9px] font-black uppercase tracking-wider text-[#2563EB] hover:underline cursor-pointer"
-                          >
-                            Mark as {a.status === "READY" ? "Pending" : "Ready"}
-                          </button>
-                        )}
+                      <div className="text-center justify-self-center">
+                        <div className="flex flex-col items-center justify-center gap-1">
+                          <span className={`inline-block px-3 py-0.5 rounded-full text-xs font-semibold border ${statusStyles[a.status]}`}>
+                            {a.status || "PENDING"}
+                          </span>
+                          {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
+                            <button
+                              onClick={() => toggleAdvanceReady(a)}
+                              className="text-[11px] font-bold text-blue-600 hover:underline tracking-tight uppercase cursor-pointer"
+                            >
+                              MARK AS {a.status === "READY" ? "PENDING" : "READY"}
+                            </button>
+                          )}
+                        </div>
                       </div>
                       <div className="flex items-center justify-end gap-1.5 flex-nowrap">
                         <button onClick={() => shareAdvanceReceiptWhatsApp({
@@ -4608,11 +4774,7 @@ export default function POSBilling() {
                             <IndianRupee className="w-4 h-4" />
                           </button>
                         )}
-                        {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
-                          <button onClick={() => doCancelAdvance(a)} title="Cancel" className="flex items-center justify-center w-8 h-8 bg-[#F59E0B]/10 hover:bg-[#F59E0B]/20 text-[#D97706] rounded-md transition-colors cursor-pointer shrink-0">
-                            <X className="w-4 h-4" />
-                          </button>
-                        )}
+                        
                         {role === "admin" && (
                           <button onClick={() => doDeleteAdvance(a)} title="Delete" className="flex items-center justify-center w-8 h-8 bg-[#DC2626]/10 hover:bg-[#DC2626]/20 text-[#DC2626] rounded-md transition-colors cursor-pointer shrink-0">
                             <Trash2 className="w-4 h-4" />
@@ -5137,38 +5299,55 @@ export default function POSBilling() {
             {analyticsSubTab === "today" && (
               <>
                 {/* Today's KPI Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-3 gap-4 mb-8">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Today's Revenue
+                        Today's Cash Flow
                       </span>
                       <div className="w-6 h-6 rounded-full bg-[#10B981]/10 flex items-center justify-center">
                         <IndianRupee className="w-3 h-3 text-[#10B981] animate-pulse" />
                       </div>
                     </div>
                     <div className="text-xl font-black text-[#000000] mb-1">
-                      ₹{todayRevenue.toLocaleString()}
+                      ₹{todayCashFlow.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      Completed today
+                      Sales: ₹{todayRevenue.toLocaleString()} + Deposits: ₹{todayAdvanceDeposits.toLocaleString()}
                     </div>
                   </div>
 
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Today's Bills
+                        Today's Bills &amp; Deposits
                       </span>
                       <div className="w-6 h-6 rounded-full bg-tertiary/10 flex items-center justify-center">
                         <Trophy className="w-3 h-3 text-tertiary animate-swing" />
                       </div>
                     </div>
                     <div className="text-xl font-black text-[#000000] mb-1">
-                      {todayOrdersCount}
+                      {todayOrdersCount + todayAdvanceOrders.length}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      Completed today
+                      {todayOrdersCount} completed sales, {todayAdvanceOrders.length} advance deposits
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                        Advance Outstanding
+                      </span>
+                      <div className="w-6 h-6 rounded-full bg-[#FEE2E2] flex items-center justify-center">
+                        <Clock className="w-3 h-3 text-[#DC2626]" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-[#DC2626] mb-1">
+                      ₹{advanceOutstandingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      {pendingAdvanceOrders.length} pending advance orders
                     </div>
                   </div>
 
@@ -5215,11 +5394,11 @@ export default function POSBilling() {
                           />
                         </div>
                       </div>
-                      {todayOrders.length === 0 ? (
+                      {todayOrders.length === 0 && todayAdvanceOrders.length === 0 ? (
                         <div className="text-center text-[#000000] text-xs font-semibold py-12">
                           {analyticsSearchPhone
                             ? "No matching transactions found."
-                            : "No orders placed today."}
+                            : "No orders or deposits placed today."}
                         </div>
                       ) : (
                         <div className="overflow-x-auto">
@@ -5227,19 +5406,19 @@ export default function POSBilling() {
                             <thead>
                               <tr className="bg-[#FFFFFF] border-b border-black/10">
                                 <th className="p-3 text-[10px] font-bold text-[#000000] uppercase tracking-wider">
-                                  Invoice ID
+                                  Invoice / Deposit ID
                                 </th>
                                 <th className="p-3 text-[10px] font-bold text-[#000000] uppercase tracking-wider">
                                   Customer No
                                 </th>
                                 <th className="p-3 text-[10px] font-bold text-[#000000] uppercase tracking-wider">
-                                  Source
+                                  Type / Source
                                 </th>
                                 <th className="p-3 text-[10px] font-bold text-[#000000] uppercase tracking-wider text-right">
                                   Items
                                 </th>
                                 <th className="p-3 text-[10px] font-bold text-[#000000] uppercase tracking-wider text-right">
-                                  Grand Total
+                                  Amount Collected
                                 </th>
                               </tr>
                             </thead>
@@ -5275,6 +5454,35 @@ export default function POSBilling() {
                                   </td>
                                   <td className="p-3 text-xs font-black text-[#0097A7] text-right">
                                     ₹{order.grandTotal.toLocaleString()}
+                                  </td>
+                                </tr>
+                              ))}
+                              {todayAdvanceOrders.map((adv) => (
+                                <tr
+                                  key={adv.id}
+                                  className="border-b border-transparent hover:bg-[#FFFBEB]/50 transition-colors"
+                                >
+                                  <td className="p-3 text-xs font-semibold text-[#B45309]">
+                                    {adv.id}
+                                  </td>
+                                  <td className="p-3 text-xs font-mono font-bold text-[#000000]">
+                                    {adv.customer_phone || "-"}
+                                  </td>
+                                  <td className="p-3">
+                                    <span className="px-2 py-0.5 rounded text-[9px] font-bold tracking-widest border border-amber-400 text-amber-800 bg-amber-50">
+                                      ADVANCE DEPOSIT
+                                    </span>
+                                  </td>
+                                  <td className="p-3 text-xs font-semibold text-[#000000] text-right">
+                                    {adv.items.reduce((s, i) => s + i.quantity, 0)} pcs (Deposit)
+                                  </td>
+                                  <td className="p-3 text-xs text-right">
+                                    <span className="font-black text-[#16A34A]">
+                                      ₹{Number(adv.deposit_amount).toLocaleString()}
+                                    </span>
+                                    <span className="block text-[10px] text-amber-700 font-bold">
+                                      Bal: ₹{balanceRemaining(adv).toLocaleString()}
+                                    </span>
                                   </td>
                                 </tr>
                               ))}
@@ -5710,6 +5918,60 @@ export default function POSBilling() {
                       </div>
                     </div>
                   )}
+                </div>
+
+                {/* Advance Orders & Cash Flow Breakdown */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
+                  <div className="bg-white border border-[#F59E0B]/30 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                        Advance Deposits Collected
+                      </span>
+                      <div className="w-6 h-6 rounded-full bg-[#F59E0B]/10 flex items-center justify-center">
+                        <Coins className="w-3 h-3 text-[#F59E0B]" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-[#B45309] mb-1">
+                      ₹{periodAdvanceDeposits.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      {analyticsFilteredAdvanceOrders.length} advance deposits in period
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-[#DC2626]/30 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                        Outstanding Balance
+                      </span>
+                      <div className="w-6 h-6 rounded-full bg-[#FEE2E2] flex items-center justify-center">
+                        <Clock className="w-3 h-3 text-[#DC2626]" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-[#991B1B] mb-1">
+                      ₹{advanceOutstandingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      {pendingAdvanceOrders.length} pending / ready orders awaiting balance
+                    </div>
+                  </div>
+
+                  <div className="bg-white border border-[#10B981]/30 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                        Total Cash Inflow (Sales + Deposits)
+                      </span>
+                      <div className="w-6 h-6 rounded-full bg-[#10B981]/10 flex items-center justify-center">
+                        <Wallet className="w-3 h-3 text-[#10B981]" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-[#059669] mb-1">
+                      ₹{(totalRevenueAmount + periodAdvanceDeposits).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      Sales: ₹{totalRevenueAmount.toLocaleString("en-IN")} + Deposits: ₹{periodAdvanceDeposits.toLocaleString("en-IN")}
+                    </div>
+                  </div>
                 </div>
 
                 {/* Main Charts & Breakdowns */}

@@ -133,6 +133,8 @@ export default async function InvoicePage({
   const splitGpayNum = Number(order.split_gpay) || 0;
   const changeReturned =
     cashReceivedNum > grandTotalNum ? cashReceivedNum - grandTotalNum : 0;
+  const balanceDue =
+    cashReceivedNum < grandTotalNum ? grandTotalNum - cashReceivedNum : 0;
 
   const paymentLabel =
     order.payment_mode === "SPLIT"
@@ -282,6 +284,21 @@ export default async function InvoicePage({
               <span>TOTAL:</span>
               <span>₹{grandTotalNum.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
             </div>
+            <div className="flex justify-between text-[11px] font-semibold mt-1">
+              <span>Amount Received:</span>
+              <span>₹{cashReceivedNum.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+            </div>
+            {cashReceivedNum >= grandTotalNum ? (
+              <div className="flex justify-between text-[11px] font-semibold">
+                <span>Change Returned:</span>
+                <span>₹{changeReturned.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+            ) : (
+              <div className="flex justify-between text-[11px] font-bold text-red-700">
+                <span>Balance Due:</span>
+                <span>₹{balanceDue.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+              </div>
+            )}
           </div>
           <div className="text-[10px] space-y-1 mb-3">
             <p className="font-semibold text-center border-b border-dashed border-black/20 pb-2 mb-2">{paymentLabel}</p>
@@ -355,8 +372,8 @@ export default async function InvoicePage({
         {/* Billed To Details */}
         <div className="py-5 border-b border-zinc-200 flex flex-col sm:flex-row justify-between items-start gap-4 text-xs">
           <div>
-            <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1">
-              Billed To
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+              BILLED TO
             </div>
             <div className="text-sm font-semibold text-zinc-900">
               {order.customer_name?.trim() ? order.customer_name : "Counter Customer"}
@@ -377,11 +394,11 @@ export default async function InvoicePage({
             )}
           </div>
 
-          <div className="sm:text-right text-xs text-zinc-500">
-            <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-1">
-              Place of Supply
+          <div className="sm:text-right text-xs">
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+              PLACE OF SUPPLY
             </div>
-            <div className="font-medium text-zinc-800">Tamil Nadu (33)</div>
+            <div className="font-medium text-slate-900">Tamil Nadu (33)</div>
           </div>
         </div>
 
@@ -445,92 +462,72 @@ export default async function InvoicePage({
 
         {/* Totals & Breakdown */}
         <div className="border-t border-zinc-200 pt-4 flex flex-col sm:flex-row justify-between items-start gap-8 text-xs">
-          {/* Left Side: Amount in Words, Bank / UPI & Terms */}
-          <div className="space-y-4 max-w-sm">
+          {/* Left Side: Payment Audit & Words Breakdown */}
+          <div className="space-y-3.5 max-w-sm flex-1">
             <div>
-              <div className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider mb-0.5">
-                Amount in Words
+              <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                AMOUNT IN WORDS
               </div>
-              <div className="text-xs font-medium text-zinc-800 italic">
+              <div className="text-xs font-semibold italic text-slate-900">
                 {numberToWords(grandTotalNum)}
               </div>
             </div>
 
-            {/* Payment details */}
-            {(cashReceivedNum > 0 || order.payment_mode === "SPLIT") && (
-              <div className="text-xs text-zinc-600 space-y-0.5 pt-1">
-                {order.payment_mode === "SPLIT" ? (
-                  <>
-                    <div>
-                      <span className="text-zinc-400">Paid by Cash: </span>
-                      <span className="font-mono font-medium text-zinc-800">
-                        ₹{splitCashNum.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-zinc-400">Paid by GPay: </span>
-                      <span className="font-mono font-medium text-zinc-800">
-                        ₹{splitGpayNum.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-zinc-400">Total Received: </span>
-                      <span className="font-mono font-medium text-zinc-800">
-                        ₹{cashReceivedNum.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                      </span>
-                    </div>
-                  </>
-                ) : (
-                  <div>
-                    <span className="text-zinc-400">
-                      {order.payment_mode === "GPAY" ? "Paid via GPay: " : "Cash Received: "}
-                    </span>
-                    <span className="font-mono font-medium text-zinc-800">
-                      ₹{cashReceivedNum.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                )}
-                {changeReturned > 0 && (
-                  <div>
-                    <span className="text-zinc-400">Change Returned: </span>
-                    <span className="font-mono font-medium text-zinc-800">
-                      ₹{changeReturned.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                    </span>
-                  </div>
-                )}
+            {/* Cash Payment Audit */}
+            <div className="text-xs space-y-1 pt-1">
+              <div>
+                <span className="text-slate-500 text-xs">Cash Received: </span>
+                <span className="font-bold text-slate-900">
+                  ₹{cashReceivedNum.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </span>
               </div>
-            )}
+              {cashReceivedNum >= grandTotalNum ? (
+                <div>
+                  <span className="text-slate-500 text-xs">Change Returned: </span>
+                  <span className="font-bold text-slate-900">
+                    ₹{changeReturned.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              ) : (
+                <div>
+                  <span className="text-slate-500 text-xs">Balance Due: </span>
+                  <span className="font-bold text-rose-600">
+                    ₹{balanceDue.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </span>
+                </div>
+              )}
+            </div>
 
-            {/* Simple Terms */}
-            <div className="text-[11px] text-zinc-500 leading-relaxed pt-2">
-              <p className="font-medium text-zinc-700 mb-0.5">Terms &amp; Notes:</p>
+            {/* Terms & Notes */}
+            <div className="text-[11px] text-slate-500 leading-relaxed pt-1 space-y-0.5">
+              <p className="font-semibold text-slate-700 mb-0.5">Terms &amp; Notes:</p>
               <p>• Goods once sold can only be exchanged within 7 days with this invoice.</p>
-              <p>• Salon services and custom beauty treatments are non-refundable.</p>
+              <p>• Parryware warranty as per manufacturer standard policy.</p>
             </div>
           </div>
 
-          {/* Right Side: Financial Breakdown */}
+          {/* Right Side: Subtotal & Grand Total Block */}
           <div className="w-full sm:w-64 space-y-2 text-xs">
-            <div className="flex justify-between text-zinc-600">
+            <div className="flex justify-between text-slate-600">
               <span>
                 Subtotal
                 {order.is_gst && (
-                  <span className="text-[9px] font-semibold text-zinc-400 uppercase ml-1">
+                  <span className="text-[9px] font-semibold text-slate-400 uppercase ml-1">
                     incl. GST
                   </span>
                 )}
               </span>
-              <span className="font-mono text-zinc-900">
+              <span className="font-mono text-slate-900 font-medium">
                 ₹{subtotalNum.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
 
             {discountNum > 0 && (
-              <div className="flex justify-between text-zinc-600">
+              <div className="flex justify-between text-slate-600">
                 <span>
                   Discount {order.discount_type === "PERCENT" ? `(${order.discount_value}%)` : ""}
                 </span>
-                <span className="font-mono text-zinc-900">
+                <span className="font-mono text-slate-900">
                   − ₹{discountNum.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
@@ -538,18 +535,18 @@ export default async function InvoicePage({
 
             {order.is_gst && gstAmountNum > 0 && (
               <>
-                <div className="pt-1 mt-1 border-t border-dashed border-zinc-200 text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                <div className="pt-1 mt-1 border-t border-dashed border-slate-200 text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
                   GST (included above)
                 </div>
-                <div className="flex justify-between text-zinc-600">
+                <div className="flex justify-between text-slate-600">
                   <span>CGST ({halfGstRate.toFixed(1)}%)</span>
-                  <span className="font-mono text-zinc-800">
+                  <span className="font-mono text-slate-800">
                     ₹{halfGstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
-                <div className="flex justify-between text-zinc-600">
+                <div className="flex justify-between text-slate-600">
                   <span>SGST ({halfGstRate.toFixed(1)}%)</span>
-                  <span className="font-mono text-zinc-800">
+                  <span className="font-mono text-slate-800">
                     ₹{halfGstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </span>
                 </div>
@@ -557,19 +554,21 @@ export default async function InvoicePage({
             )}
 
             {deliveryFeeNum > 0 && (
-              <div className="flex justify-between text-zinc-600 pt-1 border-t border-dashed border-zinc-200">
+              <div className="flex justify-between text-slate-600 pt-1 border-t border-dashed border-slate-200">
                 <span>Delivery Fee</span>
-                <span className="font-mono text-zinc-800">
+                <span className="font-mono text-slate-800">
                   ₹{deliveryFeeNum.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                 </span>
               </div>
             )}
 
-            <div className="border-t border-zinc-900 pt-2.5 mt-2 flex justify-between items-baseline">
-              <span className="text-sm font-bold text-zinc-900 uppercase">
-                Total
+            <div className="border-t border-slate-900 my-2" />
+
+            <div className="flex justify-between items-baseline">
+              <span className="font-black text-sm tracking-wider uppercase text-black">
+                TOTAL
               </span>
-              <span className="font-mono text-lg font-bold text-zinc-900">
+              <span className="font-mono font-black text-base text-black">
                 ₹{grandTotalNum.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </span>
             </div>
