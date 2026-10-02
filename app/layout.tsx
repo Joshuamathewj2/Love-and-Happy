@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Poppins } from "next/font/google";
 import "./globals.css";
-import PWAHandler from "./components/PWAHandler";
 
 const poppins = Poppins({
   variable: "--font-poppins",
@@ -52,7 +51,6 @@ export default function RootLayout({
       </head>
       <body className="min-h-full flex flex-col">
         {children}
-        <PWAHandler />
       </body>
     </html>
   );

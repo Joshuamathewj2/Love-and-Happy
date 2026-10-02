@@ -125,10 +125,10 @@ export default async function AdvanceReceiptPage({
                 Love &amp; Happy Unisex Salon
               </h1>
               <p className="text-xs text-zinc-500 leading-relaxed max-w-xs">
-                55/6, Melaratha Veethi, Tiruchendur, Tamil Nadu - 628215
+                No 65, 4 th cross west, Thillai Nagar, Tiruchchirappalli 620018
               </p>
               <div className="text-xs text-zinc-600 pt-1">
-                <p>Phone: +91 88072 99918</p>
+                <p>Phone: +91 98431 12203</p>
               </div>
             </div>
           </div>

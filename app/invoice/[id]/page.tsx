@@ -220,9 +220,9 @@ export default async function InvoicePage({
           <div className="text-center pb-3 border-b border-dashed border-black/40 mb-3">
             <h1 className="text-xl font-bold tracking-tight">LOVE &amp; HAPPY</h1>
             <p className="text-[11px] font-bold tracking-wider uppercase text-zinc-700">Unisex Salon</p>
-            <p className="text-[11px] mt-1">55/6, Melaratha Veethi</p>
-            <p className="text-[11px]">Tiruchendur, TN - 628215</p>
-            <p className="text-[11px]">Ph: +91 88072 99918</p>
+            <p className="text-[11px] mt-1">No 65, 4 th cross west, Thillai Nagar</p>
+            <p className="text-[11px]">Tiruchchirappalli, TN - 620018</p>
+            <p className="text-[11px]">Ph: +91 98431 12203</p>
             {order.is_gst && <p className="text-[11px] font-bold mt-1">GSTIN: —</p>}
           </div>
           <div className="text-[11px] pb-3 border-b border-dashed border-black/40 mb-3 space-y-1">
@@ -308,10 +308,10 @@ export default async function InvoicePage({
                 Love &amp; Happy Unisex Salon
               </h1>
               <p className="text-xs text-zinc-500 leading-relaxed max-w-xs">
-                55/6, Melaratha Veethi, Tiruchendur, Tamil Nadu - 628215
+                No 65, 4 th cross west, Thillai Nagar, Tiruchchirappalli 620018
               </p>
               <div className="text-xs text-zinc-600 pt-1 space-y-0.5">
-                <p>Phone: +91 88072 99918</p>
+                <p>Phone: +91 98431 12203</p>
                 {order.is_gst && (
                   <p className="text-zinc-800 font-medium pt-0.5">
                     GSTIN: <span className="font-mono">—</span> • State Code: 33

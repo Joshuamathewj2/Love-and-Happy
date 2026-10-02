@@ -1,6 +1,6 @@
 # Love & Happy Unisex Salon — POS & Billing System
 
-A PWA-enabled Point of Sale (POS), billing, and client service management system for **Love & Happy Unisex Salon**, Tiruchendur. It handles quick invoice generation, WhatsApp delivery of digital receipts, order history, GST / non-GST billing with two revenue dashboards, and full salon services catalog.
+A PWA-enabled Point of Sale (POS), billing, and client service management system for **Love & Happy Unisex Salon**, Tiruchchirappalli. It handles quick invoice generation, WhatsApp delivery of digital receipts, order history, GST / non-GST billing with two revenue dashboards, and full salon services catalog.
 
 ## Features
 
