@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, CreditCard, Save } from "lucide-react";
+import { ArrowLeft, CreditCard, Save, Loader2 } from "lucide-react";
 import { createAdvanceOrder } from "@/app/pos/actions";
 import { PaymentMode } from "@/lib/types";
 
@@ -75,19 +75,30 @@ export default function AdminBillingPage() {
   const [itemPrice, setItemPrice] = useState("");
   const [itemQty, setItemQty] = useState("1");
   const [isSaving, setIsSaving] = useState(false);
+  const isSavingRef = useRef(false);
 
   const onSaveAdvance = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingRef.current || isSaving) return;
+    isSavingRef.current = true;
+    setIsSaving(true);
+
     if (!customerName.trim()) {
+      isSavingRef.current = false;
+      setIsSaving(false);
       alert("Customer name is required.");
       return;
     }
     if (customerPhone.length !== 10) {
+      isSavingRef.current = false;
+      setIsSaving(false);
       alert("Valid 10-digit phone number is required.");
       return;
     }
     const deposit = Number(depositAmount) || 0;
     if (deposit <= 0) {
+      isSavingRef.current = false;
+      setIsSaving(false);
       alert("Deposit amount must be greater than 0.");
       return;
     }
@@ -96,11 +107,18 @@ export default function AdminBillingPage() {
     const sub = price * qty;
 
     if (!itemName.trim() || sub <= 0) {
+      isSavingRef.current = false;
+      setIsSaving(false);
       alert("Valid item name and price are required.");
       return;
     }
+    if (deposit >= sub) {
+      isSavingRef.current = false;
+      setIsSaving(false);
+      alert("Deposit cannot equal or exceed the total amount. For full payment, complete standard retail checkout.");
+      return;
+    }
 
-    setIsSaving(true);
     try {
       const res = await handleSaveAdvanceOrder(
         {
@@ -125,11 +143,23 @@ export default function AdminBillingPage() {
         router
       );
 
-      alert(`Advance Order ${res.advanceOrderId} saved successfully!`);
+      // Clear the current cart and form fields immediately upon a successful save to ensure the same transaction cannot be resubmitted
+      setCustomerName("");
+      setCustomerPhone("");
+      setCustomerAddress("");
+      setDepositAmount("");
+      setItemName("");
+      setItemPrice("");
+      setItemQty("1");
+      setNotes("");
+      setDeliveryDate("");
+
+      alert(`Advance Order ${res.advanceOrderId} saved successfully with status PENDING!`);
       router.push("/admin/advance-orders");
     } catch (err: any) {
       alert(`Error: ${err?.message || "Failed to save advance order."}`);
     } finally {
+      isSavingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -221,9 +251,19 @@ export default function AdminBillingPage() {
             <button
               type="submit"
               disabled={isSaving}
-              className="inline-flex items-center gap-2 px-5 py-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors disabled:opacity-50"
+              className="inline-flex items-center gap-2 px-5 py-2.5 bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs rounded-xl shadow-xs transition-colors disabled:opacity-50 uppercase tracking-wider cursor-pointer disabled:cursor-not-allowed"
             >
-              <Save className="w-4 h-4" /> Save Advance Order
+              {isSaving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>SAVING ADVANCE ORDER...</span>
+                </>
+              ) : (
+                <>
+                  <Save className="w-4 h-4" />
+                  <span>SAVE AS ADVANCE ORDER</span>
+                </>
+              )}
             </button>
           </div>
         </form>

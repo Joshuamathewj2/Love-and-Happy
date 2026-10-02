@@ -401,6 +401,7 @@ export default function POSBilling() {
   const [advNotes, setAdvNotes] = useState<string>("");
   const [advDepositPaymentMode, setAdvDepositPaymentMode] = useState<OrderPaymentMode>("CASH");
   const [isSavingAdvance, setIsSavingAdvance] = useState(false);
+  const isSavingAdvanceLock = useRef(false);
 
   const [selectedAdvance, setSelectedAdvance] = useState<AdvanceOrderWithRelations | null>(null);
   const [advanceViewMode, setAdvanceViewMode] = useState<"view" | "receive" | null>(null);
@@ -410,6 +411,7 @@ export default function POSBilling() {
   const [receiveIsGst, setReceiveIsGst] = useState(false);
   const [receiveGstPct, setReceiveGstPct] = useState<number>(18);
   const [isFinalizing, setIsFinalizing] = useState(false);
+  const isFinalizingLock = useRef(false);
 
   const [advSearchQuery, setAdvSearchQuery] = useState("");
   const [advStatusFilter, setAdvStatusFilter] = useState<"ALL" | AdvanceOrderStatus>("ALL");
@@ -424,11 +426,13 @@ export default function POSBilling() {
   const [splitCash, setSplitCash] = useState<number>(0);
   const [splitGpay, setSplitGpay] = useState<number>(0);
   const [applyGST, setApplyGST] = useState<boolean>(false);
+  const [taxMode, setTaxMode] = useState<"exclusive" | "inclusive">("exclusive");
   const [gstPercentage, setGstPercentage] = useState<number>(18);
   const [activeInvoiceId, setActiveInvoiceId] = useState<string | null>(null);
   const [completedBillData, setCompletedBillData] =
     useState<CompletedOrder | null>(null);
   const [isSubmittingOrder, setIsSubmittingOrder] = useState<boolean>(false);
+  const isSubmittingOrderLock = useRef(false);
   const [printModalData, setPrintModalData] = useState<{ id: string, type: "invoice" | "advance" } | null>(null);
   const [printPrefs, setPrintPrefs] = useState<{ paper: "thermal" | "a4", size: "58" | "80" | "a4" | "a5" }>({ paper: "thermal", size: "80" });
 
@@ -594,65 +598,72 @@ export default function POSBilling() {
         fetchCategories(),
         fetchAdvanceOrders(),
       ]);
-      setAdvanceOrders(
-        advanceData.map((a) => ({
+      const uniqueAdvMap = new Map<string, AdvanceOrderWithRelations>();
+      for (const a of advanceData || []) {
+        if (!a.id || uniqueAdvMap.has(a.id)) continue;
+        uniqueAdvMap.set(a.id, {
           ...a,
           subtotal: Number(a.subtotal) || 0,
           total_amount: Number(a.total_amount) || 0,
           deposit_amount: Number(a.deposit_amount) || 0,
-          items: a.items.map((i) => ({
+          items: (a.items || []).map((i) => ({
             ...i,
             snapshot_price: Number(i.snapshot_price) || 0,
             quantity: Number(i.quantity) || 0,
           })),
-        })),
-      );
+        });
+      }
+      setAdvanceOrders(Array.from(uniqueAdvMap.values()));
+
       setCatalog(productsData && productsData.length > 0 ? productsData.map(productToCatalogItem) : LOVE_AND_HAPPY_CATALOG_ITEMS);
       setCategories(categoriesData && categoriesData.length > 0 ? categoriesData : LOVE_AND_HAPPY_CATEGORIES);
       setExpenses(
         expensesData.map((e) => ({ ...e, amount: Number(e.amount) || 0 })),
       );
 
-      setOrders(
-        ordersData.map((o) => {
-          return {
-            id: o.id,
-            customerName: o.customer_name || "Guest",
-            customerPhone: o.customer_phone,
-            customerAddress: o.customer_address || null,
-            source: o.source,
-            isGst: Boolean(o.is_gst),
-            items: o.items.map((i) => ({
-              id: i.id,
-              name: i.snapshot_name,
-              desc: i.snapshot_name === "Custom Item" ? "Custom" : "",
-              price: Number(i.snapshot_price) || 0,
-              qty: Number(i.quantity) || 0,
-            })),
-            subtotal: Number(o.subtotal) || 0,
-            discount: Number(o.discount_amount) || 0,
-            discountType: o.discount_type,
-            discountValue: o.discount_value
-              ? Number(o.discount_value)
-              : undefined,
-            gstPercentage: Number(o.gst_percentage) || 0,
-            gstAmount: Number(o.gst_amount) || 0,
-            deliveryFee: Number(o.delivery_fee) || 0,
-            grandTotal: Number(o.grand_total) || 0,
-            cashReceived: Number(o.cash_received) || 0,
-            splitCash: Number((o as { split_cash?: number }).split_cash) || 0,
-            splitGpay: Number((o as { split_gpay?: number }).split_gpay) || 0,
-            paymentMode: (POS_PAYMENT_MODES as readonly string[]).includes(
-              String(o.payment_mode),
-            )
-              ? (o.payment_mode as OrderPaymentMode)
-              : "CASH",
-            date: o.bill_date,
-            createdAt: o.created_at,
-            status: o.status === "COMPLETED" ? "Completed" : "Pending",
-          };
-        }),
-      );
+      const uniqueOrderMap = new Map<string, any>();
+      for (const o of ordersData || []) {
+        if (!o.id || uniqueOrderMap.has(o.id)) continue;
+        uniqueOrderMap.set(o.id, {
+          id: o.id,
+          customerName: o.customer_name || "Guest",
+          customerPhone: o.customer_phone,
+          customerAddress: o.customer_address || null,
+          source: o.source,
+          isGst: Boolean(o.is_gst),
+          items: (o.items || []).map((i: any) => ({
+            id: i.id,
+            name: i.snapshot_name,
+            desc: i.snapshot_name === "Custom Item" ? "Custom" : "",
+            price: Number(i.snapshot_price) || 0,
+            qty: Number(i.quantity) || 0,
+          })),
+          subtotal: Number(o.subtotal) || 0,
+          discount: Number(o.discount_amount) || 0,
+          discountType: o.discount_type,
+          discountValue: o.discount_value
+            ? Number(o.discount_value)
+            : undefined,
+          gstPercentage: Number(o.gst_percentage) || 0,
+          gstAmount: Number(o.gst_amount) || 0,
+          deliveryFee: Number(o.delivery_fee) || 0,
+          grandTotal: Number(o.grand_total) || 0,
+          cashReceived: Number(o.cash_received) || 0,
+          splitCash: Number((o as { split_cash?: number }).split_cash) || 0,
+          splitGpay: Number((o as { split_gpay?: number }).split_gpay) || 0,
+          paymentMode: (POS_PAYMENT_MODES as readonly string[]).includes(
+            String(o.payment_mode),
+          )
+            ? (o.payment_mode as OrderPaymentMode)
+            : "CASH",
+          is_advance: (o as any).is_advance,
+          order_type: (o as any).order_type,
+          date: o.bill_date,
+          createdAt: o.created_at,
+          status: o.status === "COMPLETED" ? "Completed" : "Pending",
+        });
+      }
+      setOrders(Array.from(uniqueOrderMap.values()));
     } catch (err) {
       console.error("Error refreshing data:", err);
     } finally {
@@ -1015,19 +1026,37 @@ export default function POSBilling() {
     setCatalog((prev) => prev.filter((c) => c.id !== id));
   };
 
-  // Product prices are GST-inclusive. Subtotal already contains GST; we back-derive
-  // the GST portion for display and never add it on top of the grand total.
-  const subtotal = items.reduce((acc, item) => acc + item.price * item.qty, 0);
+  // Calculate Subtotal, Discounts, GST and Grand Total strictly adhering to Tax Mode
+  const subtotal = items.reduce((acc, item) => acc + (Number(item.price) || 0) * (item.qty || 1), 0);
   const calculatedDiscount =
     discountType === "percent"
-      ? subtotal * (discountValue / 100)
-      : discountValue;
-  const netInclusive = Math.max(0, subtotal - calculatedDiscount);
-  const gstAmount =
-    applyGST && gstPercentage > 0
-      ? netInclusive - netInclusive / (1 + gstPercentage / 100)
-      : 0;
-  const grandTotal = netInclusive + deliveryFee;
+      ? Number((subtotal * (discountValue / 100)).toFixed(2))
+      : Number(discountValue) || 0;
+  const netSubtotal = Math.max(0, subtotal - calculatedDiscount);
+
+  let taxableAmount = netSubtotal;
+  let gstAmount = 0;
+  let grandTotal = Number((netSubtotal + deliveryFee).toFixed(2));
+
+  if (applyGST && gstPercentage > 0) {
+    if (taxMode === "exclusive") {
+      // GST Exclusive Mode (Add-on GST):
+      // Taxable Subtotal = Sum of items
+      // GST Amount = Subtotal × (GST% / 100)
+      // Grand Total = Subtotal + GST Amount + Delivery Charge
+      taxableAmount = netSubtotal;
+      gstAmount = Number((netSubtotal * (gstPercentage / 100)).toFixed(2));
+      grandTotal = Number((netSubtotal + gstAmount + deliveryFee).toFixed(2));
+    } else {
+      // GST Inclusive Mode (Tax embedded):
+      // Base / Taxable Amount = Subtotal / (1 + GST% / 100)
+      // GST Amount = Subtotal - Base Amount
+      // Grand Total = Subtotal + Delivery Charge
+      taxableAmount = Number((netSubtotal / (1 + gstPercentage / 100)).toFixed(2));
+      gstAmount = Number((netSubtotal - taxableAmount).toFixed(2));
+      grandTotal = Number((netSubtotal + deliveryFee).toFixed(2));
+    }
+  }
   const cashReceivedNum = Number(cashReceived) || 0;
 
   // Suggest a GST % from the products currently in the cart (their per-product
@@ -1102,7 +1131,7 @@ export default function POSBilling() {
   };
 
   const saveAdvanceOrder = async () => {
-    if (isSavingAdvance) return;
+    if (isSavingAdvanceLock.current || isSavingAdvance) return;
     if (!customerName || customerName.trim() === "") {
       alert("Customer name is required for advance orders.");
       return;
@@ -1122,6 +1151,7 @@ export default function POSBilling() {
     }
 
     const advId = generateAdvanceOrderId();
+    isSavingAdvanceLock.current = true;
     setIsSavingAdvance(true);
     try {
       await createAdvanceOrder({
@@ -1148,7 +1178,7 @@ export default function POSBilling() {
       const receiptCustomerName = customerName.trim() || "Guest";
       const receiptCustomerPhone = customerPhone;
 
-      // Reset billing form.
+      // Reset billing form immediately upon successful save
       setItems([{ id: "1", name: "", desc: "", price: 0, qty: 1 }]);
       setCustomerName("");
       setCustomerPhone("");
@@ -1158,6 +1188,9 @@ export default function POSBilling() {
       setCashReceived("");
       setSplitCash(0);
       setSplitGpay(0);
+      setAdvDeposit("");
+      setAdvDeliveryDate("");
+      setAdvNotes("");
       setShowAdvanceSaveModal(false);
 
       // Optimistically add to advance orders state for instant display without waiting for network
@@ -1188,7 +1221,7 @@ export default function POSBilling() {
           quantity: Number(i.qty) || 1,
         })),
       };
-      setAdvanceOrders((prev) => [newAdvOrder, ...prev]);
+      setAdvanceOrders((prev) => [newAdvOrder, ...prev.filter((a) => a.id !== advId)]);
 
       // Route directly into Advance Orders management screen
       setActiveTab("advance");
@@ -1208,6 +1241,7 @@ export default function POSBilling() {
       console.error("SUPABASE SAVE ADVANCE ORDER ERROR:", err);
       alert(`Could not save the advance order: ${err?.message || "Please try again."}`);
     } finally {
+      isSavingAdvanceLock.current = false;
       setIsSavingAdvance(false);
     }
   };
@@ -1248,11 +1282,14 @@ export default function POSBilling() {
   })();
 
   const confirmReceiveBalance = async () => {
-    if (!selectedAdvance || isFinalizing) return;
+    if (!selectedAdvance || isFinalizingLock.current || isFinalizing) return;
     if (receiveBalanceDiscountAmount > balanceRemaining(selectedAdvance)) {
       alert("Discount cannot exceed the remaining balance.");
+      isFinalizingLock.current = false;
+      setIsFinalizing(false);
       return;
     }
+    isFinalizingLock.current = true;
     setIsFinalizing(true);
     try {
       const invoiceId = `INV-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
@@ -1273,7 +1310,7 @@ export default function POSBilling() {
 
       // Open the shared completion modal (Print / WhatsApp / New Sale) for the new invoice.
       try {
-        const created = await fetchOrderById(invoiceId);
+        const created = (await fetchOrderById(selectedAdvance.id)) || (await fetchOrderById(invoiceId));
         if (created) {
           setCompletedBillData({
             id: created.id,
@@ -1319,6 +1356,7 @@ export default function POSBilling() {
       console.error("SUPABASE FINALIZE ADVANCE ORDER ERROR:", err);
       alert(`Could not finalize the advance order: ${err?.message || "Please try again."}`);
     } finally {
+      isFinalizingLock.current = false;
       setIsFinalizing(false);
     }
   };
@@ -1373,12 +1411,16 @@ export default function POSBilling() {
   // (or null if validation/creation failed). WhatsApp sharing is a separate,
   // Completes and saves the sale to the database with instant optimistic updates.
   const completeSale = async (): Promise<CompletedOrder | null> => {
-    if (isSubmittingOrder) return null;
+    if (isSubmittingOrderLock.current || isSubmittingOrder) return null;
+    isSubmittingOrderLock.current = true;
+    setIsSubmittingOrder(true);
 
     if (!customerPhone || customerPhone.length !== 10) {
       alert(
         "Please enter a valid 10-digit mobile contact number to complete the sale.",
       );
+      isSubmittingOrderLock.current = false;
+      setIsSubmittingOrder(false);
       return null;
     }
 
@@ -1395,26 +1437,38 @@ export default function POSBilling() {
       alert(
         "Please ensure all items have a valid name and a price greater than 0. Remove any empty rows before proceeding.",
       );
+      isSubmittingOrderLock.current = false;
+      setIsSubmittingOrder(false);
       return null;
     }
     const itemsToSave = items;
 
     // Recalculate values locally to avoid React state lag issues
     const localSubtotal = itemsToSave.reduce(
-      (acc, item) => acc + item.price * item.qty,
+      (acc, item) => acc + (Number(item.price) || 0) * (item.qty || 1),
       0,
     );
     const localCalculatedDiscount =
       discountType === "percent"
-        ? localSubtotal * (discountValue / 100)
-        : discountValue;
-    // Prices are GST-inclusive: derive GST from subtotal instead of adding on top.
-    const localNetInclusive = Math.max(0, localSubtotal - localCalculatedDiscount);
-    const localGstAmount =
-      applyGST && gstPercentage > 0
-        ? localNetInclusive - localNetInclusive / (1 + gstPercentage / 100)
-        : 0;
-    const localGrandTotal = localNetInclusive + deliveryFee;
+        ? Number((localSubtotal * (discountValue / 100)).toFixed(2))
+        : Number(discountValue) || 0;
+    const localNetSubtotal = Math.max(0, localSubtotal - localCalculatedDiscount);
+
+    let localTaxableAmount = localNetSubtotal;
+    let localGstAmount = 0;
+    let localGrandTotal = Number((localNetSubtotal + deliveryFee).toFixed(2));
+
+    if (applyGST && gstPercentage > 0) {
+      if (taxMode === "exclusive") {
+        localTaxableAmount = localNetSubtotal;
+        localGstAmount = Number((localNetSubtotal * (gstPercentage / 100)).toFixed(2));
+        localGrandTotal = Number((localNetSubtotal + localGstAmount + deliveryFee).toFixed(2));
+      } else {
+        localTaxableAmount = Number((localNetSubtotal / (1 + gstPercentage / 100)).toFixed(2));
+        localGstAmount = Number((localNetSubtotal - localTaxableAmount).toFixed(2));
+        localGrandTotal = Number((localNetSubtotal + deliveryFee).toFixed(2));
+      }
+    }
 
     // Validate totals against PostgreSQL numeric(10,2) overflow limit (99,999,999.99)
     const MAX_LIMIT = 99999999.99;
@@ -1427,6 +1481,8 @@ export default function POSBilling() {
       alert(
         "The order totals exceed the maximum allowable system limit of ₹99,999,999.99. Please adjust the item prices, delivery fee, or cash received.",
       );
+      isSubmittingOrderLock.current = false;
+      setIsSubmittingOrder(false);
       return null;
     }
 
@@ -1438,6 +1494,8 @@ export default function POSBilling() {
       alert(
         "One or more item prices exceed the maximum system limit of ₹99,999,999.99. Please correct the item prices.",
       );
+      isSubmittingOrderLock.current = false;
+      setIsSubmittingOrder(false);
       return null;
     }
 
@@ -1465,8 +1523,6 @@ export default function POSBilling() {
         receivedAmount = localGrandTotal;
       }
     }
-
-    setIsSubmittingOrder(true);
 
     try {
       const { orderId: newOrderId } = await submitOrder({
@@ -1530,8 +1586,8 @@ export default function POSBilling() {
         status: "Completed",
       };
 
-      // Instantly update orders history and open the completed receipt banner
-      setOrders((prev) => [mappedOrder, ...prev]);
+      // Instantly update orders history and open the completed receipt banner with deduplication
+      setOrders((prev) => [mappedOrder, ...prev.filter((o) => o.id !== mappedOrder.id)]);
       setCompletedBillData(mappedOrder as any);
 
       // Non-blocking sync with backend database in the background
@@ -1566,6 +1622,7 @@ export default function POSBilling() {
       alert(`Failed to save sale: ${err?.message || "Unknown error"}`);
       return null;
     } finally {
+      isSubmittingOrderLock.current = false;
       setIsSubmittingOrder(false);
     }
   };
@@ -1867,13 +1924,6 @@ export default function POSBilling() {
     avgMonthRevenue,
     todayOrders,
     todayRevenue,
-    todayAdvanceOrders,
-    todayAdvanceDeposits,
-    todayCashFlow,
-    analyticsFilteredAdvanceOrders,
-    periodAdvanceDeposits,
-    pendingAdvanceOrders,
-    advanceOutstandingBalance,
     todayOrdersCount,
     todayOnlineOrdersCount,
     todayOfflineOrdersCount,
@@ -2190,51 +2240,6 @@ export default function POSBilling() {
         : "None";
     const topProduct = topItems[0]?.name || "None";
 
-    // Advance Orders Metrics for Analytics
-    const todayAdvanceOrders = advanceOrders.filter((a) => {
-      if (analyticsSearchPhone) {
-        const q = analyticsSearchPhone.toLowerCase();
-        const matchPhone = (a.customer_phone || "").includes(q);
-        const matchId = (a.id || "").toLowerCase().includes(q);
-        const matchName = (a.customer_name || "").toLowerCase().includes(q);
-        if (!matchPhone && !matchId && !matchName) return false;
-      }
-      const d = new Date(a.created_at);
-      return (
-        d.getDate() === now.getDate() &&
-        d.getMonth() === now.getMonth() &&
-        d.getFullYear() === now.getFullYear()
-      );
-    });
-    const todayAdvanceDeposits = todayAdvanceOrders.reduce(
-      (sum, a) => sum + (Number(a.deposit_amount) || 0),
-      0,
-    );
-    const todayCashFlow = todayRevenue + todayAdvanceDeposits;
-
-    const analyticsFilteredAdvanceOrders = advanceOrders.filter((a) => {
-      if (analyticsSearchPhone) {
-        const q = analyticsSearchPhone.toLowerCase();
-        const matchPhone = (a.customer_phone || "").includes(q);
-        const matchId = (a.id || "").toLowerCase().includes(q);
-        const matchName = (a.customer_name || "").toLowerCase().includes(q);
-        if (!matchPhone && !matchId && !matchName) return false;
-      }
-      return isDateInPeriod(a.created_at, analyticsPeriod, analyticsStartDate, analyticsEndDate);
-    });
-    const periodAdvanceDeposits = analyticsFilteredAdvanceOrders.reduce(
-      (sum, a) => sum + (Number(a.deposit_amount) || 0),
-      0,
-    );
-
-    const pendingAdvanceOrders = advanceOrders.filter(
-      (a) => a.status === "PENDING" || a.status === "READY",
-    );
-    const advanceOutstandingBalance = pendingAdvanceOrders.reduce(
-      (sum, a) => sum + Math.max(0, (Number(a.total_amount) || 0) - (Number(a.deposit_amount) || 0)),
-      0,
-    );
-
     return {
       analyticsFilteredOrders,
       totalOrdersCount,
@@ -2258,13 +2263,6 @@ export default function POSBilling() {
       avgMonthRevenue,
       todayOrders,
       todayRevenue,
-      todayAdvanceOrders,
-      todayAdvanceDeposits,
-      todayCashFlow,
-      analyticsFilteredAdvanceOrders,
-      periodAdvanceDeposits,
-      pendingAdvanceOrders,
-      advanceOutstandingBalance,
       todayOrdersCount,
       todayOnlineOrdersCount,
       todayOfflineOrdersCount,
@@ -2441,6 +2439,16 @@ export default function POSBilling() {
 
   // Filtered orders for Order History tab
   const historyFilteredOrders = orders.filter((order) => {
+    // Isolate advance orders: active/incomplete advance orders strictly exist inside Advance Orders
+    const isAdv =
+      Boolean((order as any).is_advance || (order as any).isAdvance) ||
+      (order as any).order_type === "ADVANCE" ||
+      String(order.id || "").toUpperCase().startsWith("DEP-");
+    const statusUpper = String(order.status || "").toUpperCase();
+    if (isAdv && statusUpper !== "COMPLETED") {
+      return false;
+    }
+
     const matchId = order.id
       .toLowerCase()
       .includes(orderSearchId.toLowerCase());
@@ -3974,12 +3982,13 @@ export default function POSBilling() {
                             {items
                               .filter((i) => i.name)
                               .reduce((sum, i) => sum + i.qty, 0)}{" "}
-                            items) <span className="text-[9px] font-bold text-[#007A87] uppercase">incl. GST</span>
+                            items)
                           </span>
                           <span className="font-bold text-[#000000]">
                             ₹
-                            {subtotal.toLocaleString(undefined, {
+                            {subtotal.toLocaleString("en-IN", {
                               minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
                             })}
                           </span>
                         </div>
@@ -4017,33 +4026,66 @@ export default function POSBilling() {
                             </button>
                           </div>
                           {applyGST && (
-                            <div className="flex justify-between items-center">
-                              <span className="text-xs font-bold text-[#000000] uppercase tracking-wider">
-                                GST <span className="text-[9px] font-bold text-[#007A87]">(incl.)</span>
-                              </span>
-                              <div className="flex items-center gap-2">
-                                <div className="flex items-center gap-1">
-                                  <input
-                                    type="number"
-                                    className="w-14 text-right bg-white border border-black/10 rounded-lg px-2 py-1 text-xs font-bold text-[#000000] focus:outline-none focus:border-[#0097A7] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                    value={gstPercentage || ""}
-                                    onChange={(e) =>
-                                      setGstPercentage(
-                                        parseFloat(e.target.value) || 0,
-                                      )
-                                    }
-                                    placeholder="%"
-                                  />
-                                  <span className="text-xs font-bold text-[#000000]">
-                                    %
+                            <div className="space-y-2 pt-1">
+                              {/* Tax Mode Toggle */}
+                              <div className="flex items-center bg-[#F3F4F6] border border-black/10 rounded-lg p-0.5 w-full">
+                                <button
+                                  type="button"
+                                  onClick={() => setTaxMode("exclusive")}
+                                  className={`flex-1 py-1 rounded-md text-[10px] font-bold tracking-wider uppercase transition-all cursor-pointer ${taxMode === "exclusive" ? "bg-white text-[#0097A7] shadow-xs" : "text-[#000000]/70"}`}
+                                >
+                                  Exclusive (+GST)
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setTaxMode("inclusive")}
+                                  className={`flex-1 py-1 rounded-md text-[10px] font-bold tracking-wider uppercase transition-all cursor-pointer ${taxMode === "inclusive" ? "bg-white text-[#0097A7] shadow-xs" : "text-[#000000]/70"}`}
+                                >
+                                  Inclusive (Tax incl.)
+                                </button>
+                              </div>
+
+                              {taxMode === "inclusive" && (
+                                <div className="flex justify-between items-center text-[11px] text-[#000000]/70 font-semibold px-0.5">
+                                  <span>Taxable Base Value:</span>
+                                  <span className="font-bold text-[#000000] font-mono">
+                                    ₹{taxableAmount.toLocaleString("en-IN", {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
                                   </span>
                                 </div>
-                                <span className="text-xs font-bold text-[#0097A7] w-20 text-right">
-                                  ₹
-                                  {gstAmount.toLocaleString(undefined, {
-                                    minimumFractionDigits: 2,
-                                  })}
+                              )}
+
+                              <div className="flex justify-between items-center">
+                                <span className="text-xs font-bold text-[#000000] uppercase tracking-wider">
+                                  GST ({gstPercentage}%)
                                 </span>
+                                <div className="flex items-center gap-2">
+                                  <div className="flex items-center gap-1">
+                                    <input
+                                      type="number"
+                                      className="w-14 text-right bg-white border border-black/10 rounded-lg px-2 py-1 text-xs font-bold text-[#000000] focus:outline-none focus:border-[#0097A7] [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                      value={gstPercentage || ""}
+                                      onChange={(e) =>
+                                        setGstPercentage(
+                                          parseFloat(e.target.value) || 0,
+                                        )
+                                      }
+                                      placeholder="%"
+                                    />
+                                    <span className="text-xs font-bold text-[#000000]">
+                                      %
+                                    </span>
+                                  </div>
+                                  <span className="text-xs font-bold text-[#0097A7] w-20 text-right">
+                                    ₹
+                                    {gstAmount.toLocaleString("en-IN", {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
+                                  </span>
+                                </div>
                               </div>
                             </div>
                           )}
@@ -4080,8 +4122,9 @@ export default function POSBilling() {
                         </span>
                         <span className="text-xl text-[#0097A7] font-black">
                           ₹
-                          {grandTotal.toLocaleString(undefined, {
+                          {grandTotal.toLocaleString("en-IN", {
                             minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
                           })}
                         </span>
                       </div>
@@ -4130,8 +4173,9 @@ export default function POSBilling() {
                             </span>
                             <span className="font-black text-sm text-[#0097A7]">
                               ₹
-                              {(splitCash + splitGpay).toLocaleString(undefined, {
+                              {(splitCash + splitGpay).toLocaleString("en-IN", {
                                 minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
                               })}
                             </span>
                           </div>
@@ -4142,8 +4186,9 @@ export default function POSBilling() {
                               </span>
                               <span className="font-black text-sm text-[#DC2626]">
                                 ₹
-                                {(grandTotal - (splitCash + splitGpay)).toLocaleString(undefined, {
+                                {(grandTotal - (splitCash + splitGpay)).toLocaleString("en-IN", {
                                   minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
                                 })}
                               </span>
                             </div>
@@ -4154,8 +4199,9 @@ export default function POSBilling() {
                               </span>
                               <span className="font-black text-sm text-[#00A86B]">
                                 ₹
-                                {(splitCash + splitGpay - grandTotal).toLocaleString(undefined, {
+                                {(splitCash + splitGpay - grandTotal).toLocaleString("en-IN", {
                                   minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
                                 })}
                               </span>
                             </div>
@@ -4190,7 +4236,10 @@ export default function POSBilling() {
                               Change Return
                             </span>
                             <span className="font-black text-sm text-[#16A34A]">
-                              ₹{(cashReceivedNum - grandTotal).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                              ₹{(cashReceivedNum - grandTotal).toLocaleString("en-IN", {
+                                minimumFractionDigits: 2,
+                                maximumFractionDigits: 2,
+                              })}
                             </span>
                           </div>
                         ) : (
@@ -4200,7 +4249,10 @@ export default function POSBilling() {
                                 Unpaid Balance Due
                               </span>
                               <span className="font-black text-sm text-[#B45309]">
-                                ₹{(grandTotal - cashReceivedNum).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                ₹{(grandTotal - cashReceivedNum).toLocaleString("en-IN", {
+                                  minimumFractionDigits: 2,
+                                  maximumFractionDigits: 2,
+                                })}
                               </span>
                             </div>
                             <p className="text-[10px] text-[#B45309] font-medium mt-1">
@@ -4252,18 +4304,27 @@ export default function POSBilling() {
                       {/* Save as Advance Order */}
                       <button
                         onClick={openAdvanceSaveModal}
-                        disabled={isSubmittingOrder}
+                        disabled={isSubmittingOrder || isSavingAdvance}
                         className={`w-full mt-2 border-2 ${
                           (paymentMode !== "SPLIT" && cashReceived !== "" && cashReceivedNum > 0 && cashReceivedNum < grandTotal) ||
                           (paymentMode === "SPLIT" && (Number(splitCash) || 0) + (Number(splitGpay) || 0) > 0 && (Number(splitCash) || 0) + (Number(splitGpay) || 0) < grandTotal)
                             ? "bg-amber-50 border-amber-400 hover:bg-amber-100 text-amber-800 shadow-sm"
                             : "bg-white border-[#F59E0B] hover:bg-[#FEF3C7] text-[#B45309]"
                         } py-3 rounded-lg font-black text-[10px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 transition-all active:scale-[0.98] ${
-                          isSubmittingOrder ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
+                          (isSubmittingOrder || isSavingAdvance) ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
                         }`}
                       >
-                        <Clock className="w-4 h-4" />
-                        <span>Save as Advance Order</span>
+                        {isSavingAdvance ? (
+                          <>
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                            <span>Saving Advance...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Clock className="w-4 h-4" />
+                            <span>Save as Advance Order</span>
+                          </>
+                        )}
                       </button>
                     </div>
                   </div>
@@ -5340,51 +5401,51 @@ export default function POSBilling() {
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Today's Cash Flow
+                        Today's Revenue
                       </span>
                       <div className="w-6 h-6 rounded-full bg-[#10B981]/10 flex items-center justify-center">
                         <IndianRupee className="w-3 h-3 text-[#10B981] animate-pulse" />
                       </div>
                     </div>
                     <div className="text-xl font-black text-[#000000] mb-1">
-                      ₹{todayCashFlow.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      ₹{todayRevenue.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      Sales: ₹{todayRevenue.toLocaleString()} + Deposits: ₹{todayAdvanceDeposits.toLocaleString()}
+                      Completed sales today
                     </div>
                   </div>
 
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Today's Bills &amp; Deposits
+                        Today's Completed Bills
                       </span>
                       <div className="w-6 h-6 rounded-full bg-tertiary/10 flex items-center justify-center">
                         <Trophy className="w-3 h-3 text-tertiary animate-swing" />
                       </div>
                     </div>
                     <div className="text-xl font-black text-[#000000] mb-1">
-                      {todayOrdersCount + todayAdvanceOrders.length}
+                      {todayOrdersCount}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      {todayOrdersCount} completed sales, {todayAdvanceOrders.length} advance deposits
+                      Finalized sales today
                     </div>
                   </div>
 
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Advance Outstanding
+                        Average Bill Value
                       </span>
-                      <div className="w-6 h-6 rounded-full bg-[#FEE2E2] flex items-center justify-center">
-                        <Clock className="w-3 h-3 text-[#DC2626]" />
+                      <div className="w-6 h-6 rounded-full bg-[#06B6D4]/10 flex items-center justify-center">
+                        <IndianRupee className="w-3 h-3 text-[#06B6D4] animate-bounce" />
                       </div>
                     </div>
-                    <div className="text-xl font-black text-[#DC2626] mb-1">
-                      ₹{advanceOutstandingBalance.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <div className="text-xl font-black text-[#000000] mb-1">
+                      ₹{(todayOrdersCount > 0 ? todayRevenue / todayOrdersCount : 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      {pendingAdvanceOrders.length} pending advance orders
+                      Average per completed sale
                     </div>
                   </div>
 
@@ -5431,11 +5492,11 @@ export default function POSBilling() {
                           />
                         </div>
                       </div>
-                      {todayOrders.length === 0 && todayAdvanceOrders.length === 0 ? (
+                      {todayOrders.length === 0 ? (
                         <div className="text-center text-[#000000] text-xs font-semibold py-12">
                           {analyticsSearchPhone
                             ? "No matching transactions found."
-                            : "No orders or deposits placed today."}
+                            : "No orders placed today."}
                         </div>
                       ) : (
                         <div className="overflow-x-auto">
@@ -5443,7 +5504,7 @@ export default function POSBilling() {
                             <thead>
                               <tr className="bg-[#FFFFFF] border-b border-black/10">
                                 <th className="p-3 text-[10px] font-bold text-[#000000] uppercase tracking-wider">
-                                  Invoice / Deposit ID
+                                  Invoice ID
                                 </th>
                                 <th className="p-3 text-[10px] font-bold text-[#000000] uppercase tracking-wider">
                                   Customer No
@@ -5490,36 +5551,10 @@ export default function POSBilling() {
                                     pcs
                                   </td>
                                   <td className="p-3 text-xs font-black text-[#0097A7] text-right">
-                                    ₹{order.grandTotal.toLocaleString()}
-                                  </td>
-                                </tr>
-                              ))}
-                              {todayAdvanceOrders.map((adv) => (
-                                <tr
-                                  key={adv.id}
-                                  className="border-b border-transparent hover:bg-[#FFFBEB]/50 transition-colors"
-                                >
-                                  <td className="p-3 text-xs font-semibold text-[#B45309]">
-                                    {adv.id}
-                                  </td>
-                                  <td className="p-3 text-xs font-mono font-bold text-[#000000]">
-                                    {adv.customer_phone || "-"}
-                                  </td>
-                                  <td className="p-3">
-                                    <span className="px-2 py-0.5 rounded text-[9px] font-bold tracking-widest border border-amber-400 text-amber-800 bg-amber-50">
-                                      ADVANCE DEPOSIT
-                                    </span>
-                                  </td>
-                                  <td className="p-3 text-xs font-semibold text-[#000000] text-right">
-                                    {adv.items.reduce((s, i) => s + i.quantity, 0)} pcs (Deposit)
-                                  </td>
-                                  <td className="p-3 text-xs text-right">
-                                    <span className="font-black text-[#16A34A]">
-                                      ₹{Number(adv.deposit_amount).toLocaleString()}
-                                    </span>
-                                    <span className="block text-[10px] text-amber-700 font-bold">
-                                      Bal: ₹{balanceRemaining(adv).toLocaleString()}
-                                    </span>
+                                    ₹{order.grandTotal.toLocaleString("en-IN", {
+                                      minimumFractionDigits: 2,
+                                      maximumFractionDigits: 2,
+                                    })}
                                   </td>
                                 </tr>
                               ))}
@@ -5788,9 +5823,9 @@ export default function POSBilling() {
                   </div>
                 )}
 
-                {/* Top 5x2 KPI Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-                  {/* Row 1 */}
+                {/* Core Financial Metrics (3-column balanced grid) */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                  {/* Total Revenue */}
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
@@ -5809,15 +5844,16 @@ export default function POSBilling() {
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
                       {analyticsGstFilter === "all"
-                        ? `GST (₹${gstRevenue.toLocaleString("en-IN")}) + Non-GST (₹${nonGstRevenue.toLocaleString("en-IN")})`
-                        : "POS + manual combined"}
+                        ? `GST (₹${gstRevenue.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}) + Non-GST (₹${nonGstRevenue.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })})`
+                        : "Finalized sales revenue"}
                     </div>
                   </div>
 
+                  {/* Total Orders / Completed Bills */}
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Completed Bills
+                        Total Orders
                       </span>
                       <div className="w-6 h-6 rounded-full bg-[#10B981]/10 flex items-center justify-center">
                         <Trophy className="w-3 h-3 text-[#10B981] animate-swing" />
@@ -5827,17 +5863,42 @@ export default function POSBilling() {
                       {totalOrdersCount}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      POS + manual bills
+                      Completed bills in period
                     </div>
                   </div>
 
+                  {/* Average Bill Value */}
+                  <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                    <div className="flex justify-between items-start mb-3">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
+                        Average Bill Value
+                      </span>
+                      <div className="w-6 h-6 rounded-full bg-[#06B6D4]/10 flex items-center justify-center">
+                        <IndianRupee className="w-3 h-3 text-[#06B6D4] animate-bounce" />
+                      </div>
+                    </div>
+                    <div className="text-xl font-black text-[#000000] mb-1">
+                      ₹
+                      {avgOrderValue.toLocaleString("en-IN", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2,
+                      })}
+                    </div>
+                    <div className="text-[9px] text-[#000000] font-semibold">
+                      Average per completed sale
+                    </div>
+                  </div>
+                </div>
+
+                {/* Secondary Breakdown Grid (4 columns) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
                   <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
                         Offline Bills
                       </span>
-                      <div className="w-6 h-6 rounded-full bg-[#06B6D4]/10 flex items-center justify-center">
-                        <IndianRupee className="w-3 h-3 text-[#06B6D4] animate-bounce" />
+                      <div className="w-6 h-6 rounded-full bg-[#27272A]/10 flex items-center justify-center">
+                        <ShoppingBag className="w-3 h-3 text-[#27272A] animate-pulse" />
                       </div>
                     </div>
                     <div className="text-xl font-black text-[#000000] mb-1">
@@ -5848,7 +5909,7 @@ export default function POSBilling() {
                       })}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      Walk-in POS sales
+                      {offlineOrders} walk-in orders
                     </div>
                   </div>
 
@@ -5858,7 +5919,7 @@ export default function POSBilling() {
                         Online Bills
                       </span>
                       <div className="w-6 h-6 rounded-full bg-[#007A87]/10 flex items-center justify-center">
-                        <IndianRupee className="w-3 h-3 text-[#007A87] animate-float" />
+                        <Globe className="w-3 h-3 text-[#007A87] animate-float" />
                       </div>
                     </div>
                     <div className="text-xl font-black text-[#000000] mb-1">
@@ -5869,50 +5930,7 @@ export default function POSBilling() {
                       })}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      Online POS sales
-                    </div>
-                  </div>
-                </div>
-
-                <div
-                  className={`grid grid-cols-1 sm:grid-cols-2 ${
-                    analyticsGstFilter === "all"
-                      ? "lg:grid-cols-4"
-                      : "lg:grid-cols-3"
-                  } gap-4 mb-8`}
-                >
-                  {/* Row 2 */}
-                  <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex justify-between items-start mb-3">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Total Offline Bills
-                      </span>
-                      <div className="w-6 h-6 rounded-full bg-[#27272A]/10 flex items-center justify-center">
-                        <ShoppingBag className="w-3 h-3 text-[#27272A] animate-pulse" />
-                      </div>
-                    </div>
-                    <div className="text-xl font-black text-[#000000] mb-1">
-                      {offlineOrders}
-                    </div>
-                    <div className="text-[9px] text-[#000000] font-semibold">
-                      Walk-in POS orders
-                    </div>
-                  </div>
-
-                  <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex justify-between items-start mb-3">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Total Online Bills
-                      </span>
-                      <div className="w-6 h-6 rounded-full bg-[#007A87]/10 flex items-center justify-center">
-                        <Globe className="w-3 h-3 text-[#007A87] animate-float" />
-                      </div>
-                    </div>
-                    <div className="text-xl font-black text-[#000000] mb-1">
-                      {onlineOrders}
-                    </div>
-                    <div className="text-[9px] text-[#000000] font-semibold">
-                      Online channel orders
+                      {onlineOrders} online orders
                     </div>
                   </div>
 
@@ -5926,87 +5944,30 @@ export default function POSBilling() {
                       </div>
                     </div>
                     <div className="text-xl font-black text-[#000000] mb-1">
-                      {totalItemsSold}
+                      {totalItemsSold} pcs
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
                       From completed bills
                     </div>
                   </div>
 
-                  {/* Top Product - only shown in All Bills; omitted in GST and Non-GST */}
-                  {analyticsGstFilter === "all" && (
-                    <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
-                      <div className="flex justify-between items-start mb-3">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                          Top Product
-                        </span>
-                        <div className="w-6 h-6 rounded-full bg-[#EC4899]/10 flex items-center justify-center">
-                          <Trophy className="w-3 h-3 text-[#EC4899] animate-pop" />
-                        </div>
-                      </div>
-                      <div
-                        className="text-xl font-black text-[#000000] mb-1 truncate"
-                        title={topProduct}
-                      >
-                        {topProduct}
-                      </div>
-                      <div className="text-[9px] text-[#000000] font-semibold">
-                        Most sold item
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* Advance Orders & Cash Flow Breakdown */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-8">
-                  <div className="bg-white border border-[#F59E0B]/30 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
+                  <div className="bg-white border border-black/10 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
                     <div className="flex justify-between items-start mb-3">
                       <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Advance Deposits Collected
+                        Top Product
                       </span>
-                      <div className="w-6 h-6 rounded-full bg-[#F59E0B]/10 flex items-center justify-center">
-                        <Coins className="w-3 h-3 text-[#F59E0B]" />
+                      <div className="w-6 h-6 rounded-full bg-[#EC4899]/10 flex items-center justify-center">
+                        <Trophy className="w-3 h-3 text-[#EC4899] animate-pop" />
                       </div>
                     </div>
-                    <div className="text-xl font-black text-[#B45309] mb-1">
-                      ₹{periodAdvanceDeposits.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    <div
+                      className="text-xl font-black text-[#000000] mb-1 truncate"
+                      title={topProduct}
+                    >
+                      {topProduct}
                     </div>
                     <div className="text-[9px] text-[#000000] font-semibold">
-                      {analyticsFilteredAdvanceOrders.length} advance deposits in period
-                    </div>
-                  </div>
-
-                  <div className="bg-white border border-[#DC2626]/30 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex justify-between items-start mb-3">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Outstanding Balance
-                      </span>
-                      <div className="w-6 h-6 rounded-full bg-[#FEE2E2] flex items-center justify-center">
-                        <Clock className="w-3 h-3 text-[#DC2626]" />
-                      </div>
-                    </div>
-                    <div className="text-xl font-black text-[#991B1B] mb-1">
-                      ₹{advanceOutstandingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                    <div className="text-[9px] text-[#000000] font-semibold">
-                      {pendingAdvanceOrders.length} pending / ready orders awaiting balance
-                    </div>
-                  </div>
-
-                  <div className="bg-white border border-[#10B981]/30 rounded-xl p-4 shadow-sm hover:shadow-md transition-all">
-                    <div className="flex justify-between items-start mb-3">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-[#000000]">
-                        Total Cash Inflow (Sales + Deposits)
-                      </span>
-                      <div className="w-6 h-6 rounded-full bg-[#10B981]/10 flex items-center justify-center">
-                        <Wallet className="w-3 h-3 text-[#10B981]" />
-                      </div>
-                    </div>
-                    <div className="text-xl font-black text-[#059669] mb-1">
-                      ₹{(totalRevenueAmount + periodAdvanceDeposits).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </div>
-                    <div className="text-[9px] text-[#000000] font-semibold">
-                      Sales: ₹{totalRevenueAmount.toLocaleString("en-IN")} + Deposits: ₹{periodAdvanceDeposits.toLocaleString("en-IN")}
+                      Most sold item
                     </div>
                   </div>
                 </div>

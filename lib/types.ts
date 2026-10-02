@@ -56,6 +56,9 @@ export type OrderRow = {
   payment_mode: PaymentMode;
   bill_date: string;
   created_at: string;
+  is_advance?: boolean | null;
+  order_type?: string | null;
+  invoice_id?: string | null;
 };
 
 export type OrderItemRow = {

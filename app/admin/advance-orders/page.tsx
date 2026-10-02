@@ -4,9 +4,11 @@ import React, { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Clock, MessageSquare, FileText, Eye, IndianRupee, Trash2, RefreshCw } from "lucide-react";
-import { fetchAdvanceOrders, removeAdvanceOrder } from "@/app/pos/actions";
+import { fetchAdvanceOrders, removeAdvanceOrder, setAdvanceOrderStatus } from "@/app/pos/actions";
 import { AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
 import { supabase } from "@/lib/supabaseClient";
+
+export const dynamic = "force-dynamic";
 
 type FilterTab = "ALL" | AdvanceOrderStatus;
 
@@ -20,8 +22,74 @@ export default function AdminAdvanceOrdersPage() {
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true);
     try {
-      const data = await fetchAdvanceOrders();
-      setAdvanceOrders(data || []);
+      let data = await fetchAdvanceOrders();
+      if (!data || data.length === 0) {
+        // Direct query fallback in case server action caching intervened
+        const { data: directData, error: directErr } = await supabase
+          .from("advance_orders")
+          .select(`
+            *,
+            customers (
+              name,
+              phone,
+              address
+            ),
+            advance_order_items (
+              id,
+              advance_order_id,
+              product_id,
+              snapshot_name,
+              snapshot_price,
+              quantity
+            )
+          `)
+          .order("created_at", { ascending: false });
+
+        if (directErr) {
+          console.error(
+            `[Advance Orders] Direct fetch error [code: ${directErr.code}, message: ${directErr.message}, details: ${directErr.details}, hint: ${directErr.hint}]`
+          );
+          if (directErr.code === "401" || directErr.code === "403" || directErr.code === "PGRST301") {
+            console.error("[Advance Orders] Unauthorized / RLS policy block on advance_orders table.");
+          }
+        } else if (directData && directData.length > 0) {
+          data = directData.map((r: any) => ({
+            id: r.id,
+            customer_id: r.customer_id,
+            status: r.status as AdvanceOrderStatus,
+            subtotal: Number(r.subtotal) || 0,
+            total_amount: Number(r.total_amount) || 0,
+            deposit_amount: Number(r.deposit_amount) || 0,
+            deposit_payment_mode: r.deposit_payment_mode,
+            delivery_date: r.delivery_date,
+            notes: r.notes,
+            finalized_order_id: r.finalized_order_id,
+            finalized_at: r.finalized_at,
+            cancelled_at: r.cancelled_at,
+            created_at: r.created_at,
+            customer_name: r.customers?.name || "Walk-in Customer",
+            customer_phone: r.customers?.phone || "",
+            customer_address: r.customers?.address || null,
+            items: (r.advance_order_items || []).map((it: any) => ({
+              id: it.id,
+              advance_order_id: r.id,
+              product_id: it.product_id || null,
+              snapshot_name: it.snapshot_name,
+              snapshot_desc: null,
+              snapshot_price: Number(it.snapshot_price) || 0,
+              quantity: Number(it.quantity) || 1,
+            })),
+          }));
+        }
+      }
+
+      // State Deduplication: completely overwrite state with unique rows by primary key id
+      const uniqueMap = new Map<string, AdvanceOrderWithRelations>();
+      for (const adv of data || []) {
+        if (!adv.id || uniqueMap.has(adv.id)) continue;
+        uniqueMap.set(adv.id, adv);
+      }
+      setAdvanceOrders(Array.from(uniqueMap.values()));
     } catch (err) {
       console.error("Failed to load advance orders:", err);
     } finally {
@@ -31,14 +99,69 @@ export default function AdminAdvanceOrdersPage() {
   }, []);
 
   useEffect(() => {
-    loadData();
+    let isMounted = true;
 
-    // Auto-refetch on window focus to prevent stale Next.js cache
+    // 1. Ensure auth session is restored before query execution
+    const initAuthAndFetch = async () => {
+      try {
+        const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
+        if (sessionErr) {
+          console.warn("[Advance Orders] Auth session notice:", sessionErr);
+        } else if (session) {
+          console.log("[Advance Orders] Active auth session verified:", session.user.email);
+        }
+      } catch (authErr) {
+        console.warn("[Advance Orders] Session restore notice:", authErr);
+      } finally {
+        if (isMounted) {
+          loadData();
+        }
+      }
+    };
+
+    initAuthAndFetch();
+
+    // 2. Auth state change listener
+    const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(() => {
+      if (isMounted) {
+        loadData(true);
+      }
+    });
+
+    // 3. Supabase Realtime channel listener: listen to changes and completely overwrite state
+    const channel = supabase
+      .channel("admin-advance-orders-realtime-sync")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "advance_orders" },
+        () => {
+          if (isMounted) loadData(true);
+        }
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "orders" },
+        () => {
+          if (isMounted) loadData(true);
+        }
+      )
+      .subscribe((status) => {
+        if (status === "SUBSCRIBED") {
+          console.log("[Advance Orders] Realtime sync channel active");
+        }
+      });
+
+    // 4. Window focus listener
     const handleFocus = () => {
-      loadData();
+      if (isMounted) loadData(true);
     };
     window.addEventListener("focus", handleFocus);
+
+    // Explicit cleanup function: unsubscribes channel and listeners on unmount
     return () => {
+      isMounted = false;
+      authSub.unsubscribe();
+      supabase.removeChannel(channel);
       window.removeEventListener("focus", handleFocus);
     };
   }, [loadData]);
@@ -56,22 +179,139 @@ export default function AdminAdvanceOrdersPage() {
     }
   };
 
-  const handleStatusChange = async (orderId: string, newStatus: string) => {
-    setAdvanceOrders((prev) =>
-      prev.map((ord) => (ord.id === orderId ? { ...ord, status: newStatus as AdvanceOrderStatus } : ord))
-    );
+  const handleStatusChange = async (orderId: string, newStatus: string, order: any) => {
+    const orderTotal = Number(order?.total_amount ?? order?.total ?? order?.grand_total ?? 0);
+    const statusUpper = String(newStatus || "").trim().toUpperCase() as AdvanceOrderStatus;
 
-    const { error } = await supabase
-      .from("advance_orders")
-      .update({
-        status: newStatus,
-      })
-      .eq("id", orderId);
+    // 1. Immediate local state update: decrement "OUTSTANDING BALANCE" metric in real time
+    setAdvanceOrders((prev) => {
+      const updated = prev.map((ord) => {
+        if (ord.id === orderId) {
+          const ordTotal = Number(ord.total_amount ?? (ord as any).total ?? (ord as any).grand_total ?? orderTotal);
+          return {
+            ...ord,
+            status: statusUpper,
+            deposit_amount: statusUpper === "COMPLETED" ? ordTotal : ord.deposit_amount,
+            amount_paid: statusUpper === "COMPLETED" ? ordTotal : (ord as any).amount_paid,
+            balance_due: statusUpper === "COMPLETED" ? 0 : (ord as any).balance_due,
+          };
+        }
+        return ord;
+      });
+      const uniqueMap = new Map<string, AdvanceOrderWithRelations>();
+      for (const o of updated) {
+        if (!o.id || uniqueMap.has(o.id)) continue;
+        uniqueMap.set(o.id, o);
+      }
+      return Array.from(uniqueMap.values());
+    });
 
-    if (error) {
-      console.error("Failed to update status:", error);
-      alert(`Error updating status: ${error.message}`);
-      loadData();
+    try {
+      // 2. Synchronize advance_orders table in Supabase with exact uppercase casing
+      const advUpdates: any = {
+        status: statusUpper,
+      };
+      if (statusUpper === "COMPLETED") {
+        advUpdates.finalized_at = new Date().toISOString();
+        if (orderTotal > 0) {
+          advUpdates.deposit_amount = orderTotal;
+        }
+      } else if (statusUpper === "CANCELLED") {
+        advUpdates.cancelled_at = new Date().toISOString();
+      }
+
+      const { error: advErr } = await supabase
+        .from("advance_orders")
+        .update(advUpdates)
+        .eq("id", orderId);
+
+      if (advErr) {
+        console.error("Supabase advance_orders update error:", advErr);
+        throw new Error(`Failed to update advance order: ${advErr.message}`);
+      }
+
+      // 3. Synchronize orders table in Supabase so Order History & Analytics see it
+      const { data: existingOrd } = await supabase
+        .from("orders")
+        .select("id")
+        .eq("id", orderId)
+        .maybeSingle();
+
+      if (existingOrd) {
+        const orderUpdates: any = {
+          status: statusUpper,
+        };
+        if (statusUpper === "COMPLETED" && orderTotal > 0) {
+          orderUpdates.cash_received = orderTotal;
+          orderUpdates.grand_total = orderTotal;
+        }
+
+        const { error: ordErr } = await supabase
+          .from("orders")
+          .update(orderUpdates)
+          .eq("id", orderId);
+
+        if (ordErr) {
+          console.error("Supabase orders update error:", ordErr);
+          throw new Error(`Failed to update orders table: ${ordErr.message}`);
+        }
+      } else if (statusUpper === "COMPLETED") {
+        const orderPayload: any = {
+          id: orderId,
+          customer_id: order?.customer_id || null,
+          source: "OFFLINE",
+          status: "COMPLETED",
+          is_gst: false,
+          subtotal: Number(order?.subtotal) || orderTotal,
+          discount_type: "FIXED",
+          discount_value: 0,
+          discount_amount: 0,
+          gst_percentage: 0,
+          gst_amount: 0,
+          delivery_fee: 0,
+          grand_total: orderTotal,
+          cash_received: orderTotal,
+          payment_mode: order?.deposit_payment_mode || "CASH",
+          bill_date: new Date().toISOString().split("T")[0],
+          is_advance: true,
+          order_type: "ADVANCE",
+          invoice_id: orderId,
+          created_at: order?.created_at || new Date().toISOString(),
+        };
+
+        const { error: insErr } = await supabase.from("orders").upsert(orderPayload);
+        if (insErr) {
+          console.error("Failed to upsert completed advance order to orders table:", insErr);
+          throw new Error(`Failed to sync completed advance order to orders: ${insErr.message}`);
+        }
+
+        if (order?.items && order.items.length > 0) {
+          const itemsToInsert = order.items.map((it: any, idx: number) => ({
+            id: `oi-${orderId}-${idx}`,
+            order_id: orderId,
+            product_id: it.product_id || null,
+            snapshot_name: it.snapshot_name || it.name || "Advance Item",
+            snapshot_price: Number(it.snapshot_price || it.price || 0),
+            quantity: Number(it.quantity || it.qty || 1),
+          }));
+          await supabase.from("order_items").upsert(itemsToInsert);
+        }
+      }
+
+      // 4. Trigger server-side cache revalidation
+      try {
+        await setAdvanceOrderStatus(orderId, statusUpper);
+      } catch (actErr) {
+        console.warn("Server action status revalidation notice:", actErr);
+      }
+
+      // 5. Invalidate Next.js cache and refresh data queries
+      await loadData(true);
+      router.refresh();
+    } catch (err: any) {
+      console.error("Status update error:", err);
+      alert(`Database update failed: ${err?.message || "Please check your network or database permissions."}`);
+      await loadData(true);
     }
   };
 
@@ -87,6 +327,17 @@ export default function AdminAdvanceOrdersPage() {
   const countReady = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "READY").length;
   const countCompleted = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "COMPLETED").length;
   const countCancelled = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "CANCELLED").length;
+
+  // Real-time Outstanding Balance from active (PENDING / READY) orders
+  const pendingOrders = advanceOrders.filter((a) => {
+    const st = (a.status || "PENDING").toUpperCase();
+    return st === "PENDING" || st === "READY";
+  });
+  const outstandingBalance = pendingOrders.reduce((sum, a) => {
+    const tot = Number(a.total_amount ?? (a as any).total ?? (a as any).grand_total ?? 0);
+    const paid = Number(a.deposit_amount ?? (a as any).amount_paid ?? 0);
+    return sum + Math.max(0, tot - paid);
+  }, 0);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans p-4 sm:p-8">
@@ -121,11 +372,71 @@ export default function AdminAdvanceOrdersPage() {
               Refresh
             </button>
             <Link
-              href="/pos/admin/secure/control-panel/ss-creatives"
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
+              href="/admin/orders"
+              className="px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl shadow-xs transition-colors"
             >
-              Open POS Register
+              Order History
             </Link>
+            <Link
+              href="/admin/analytics"
+              className="px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors"
+            >
+              Analytics
+            </Link>
+          </div>
+        </div>
+
+        {/* Top Summary Metric Cards (with real-time decrementing Outstanding Balance) */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex justify-between items-center">
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Outstanding Balance
+              </p>
+              <p className="text-2xl font-black text-rose-600 mt-1 font-mono">
+                ₹{outstandingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </p>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                {pendingOrders.length} pending / ready orders awaiting balance
+              </p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600">
+              <IndianRupee className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex justify-between items-center">
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Ready For Collection
+              </p>
+              <p className="text-2xl font-black text-blue-600 mt-1">
+                {countReady}
+              </p>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Orders prepared &amp; awaiting pickup
+              </p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600">
+              <Clock className="w-5 h-5" />
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex justify-between items-center">
+            <div>
+              <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+                Completed &amp; Settled
+              </p>
+              <p className="text-2xl font-black text-emerald-600 mt-1">
+                {countCompleted}
+              </p>
+              <p className="text-[10px] text-slate-400 mt-0.5">
+                Flows into Order History &amp; Analytics
+              </p>
+            </div>
+            <div className="w-10 h-10 rounded-xl bg-emerald-50 flex items-center justify-center text-emerald-600">
+              <FileText className="w-5 h-5" />
+            </div>
           </div>
         </div>
 
@@ -278,7 +589,7 @@ export default function AdminAdvanceOrdersPage() {
                         <div className="relative inline-block w-full max-w-[150px] mx-auto">
                           <select
                             value={statusUpper}
-                            onChange={(e) => handleStatusChange(a.id, e.target.value)}
+                            onChange={(e) => handleStatusChange(a.id, e.target.value, a)}
                             className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
                               statusUpper === "COMPLETED"
                                 ? "bg-emerald-50 text-emerald-800 border-emerald-300 ring-1 ring-pink-300"

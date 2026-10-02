@@ -285,18 +285,18 @@ export default function AdminInventoryPage() {
         )}
 
         {/* Search & Actions Bar */}
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-          <div className="relative w-full sm:w-80">
-            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-2 sm:gap-4">
+          <div className="relative flex-1 min-w-[140px] w-full md:w-64">
+            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 shrink-0 pointer-events-none" />
             <input
               type="text"
-              placeholder="Search by product name, SKU, or category..."
+              placeholder="Search products..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full pl-9 pr-4 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500/20 focus:border-teal-500"
             />
           </div>
-          <div className="text-xs text-slate-500 font-medium">
+          <div className="text-xs text-slate-500 font-medium shrink-0">
             Showing <span className="font-bold text-slate-900">{filteredProducts.length}</span> products
           </div>
         </div>

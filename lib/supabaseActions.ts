@@ -586,7 +586,7 @@ export async function supabaseListOrdersWithRelations(): Promise<OrderWithRelati
     const { data: customers } = await supabase.from('customers').select('*');
     const customerMap = new Map((customers || []).map((c: any) => [c.id, c]));
 
-    return flatOrders.map((o: any) => {
+    const mapped = flatOrders.map((o: any) => {
       const cust = customerMap.get(o.customer_id) || {};
       return {
         ...o,
@@ -596,9 +596,41 @@ export async function supabaseListOrdersWithRelations(): Promise<OrderWithRelati
         items: (items || []).filter((i: any) => i.order_id === o.id) as OrderItemRow[],
       };
     }) as OrderWithRelations[];
+
+    const isAdvanceOrderRow = (order: any): boolean => {
+      return (
+        order.is_advance === true ||
+        order.is_advance === 'true' ||
+        order.order_type === 'ADVANCE' ||
+        String(order.id || '').toUpperCase().startsWith('DEP-') ||
+        String(order.invoice_id || '').toUpperCase().startsWith('DEP-')
+      );
+    };
+
+    return mapped.filter((order: any) => {
+      const isAdvance = isAdvanceOrderRow(order);
+      const status = String(order.status || '').toUpperCase();
+      if (isAdvance) {
+        return status === 'COMPLETED';
+      }
+      return (
+        status === 'COMPLETED' ||
+        (!order.status && status !== 'CANCELLED' && status !== 'PENDING' && status !== 'READY')
+      );
+    });
   }
 
-  return (orders || []).map((o: any) => ({
+  const isAdvanceOrderRow = (order: any): boolean => {
+    return (
+      order.is_advance === true ||
+      order.is_advance === 'true' ||
+      order.order_type === 'ADVANCE' ||
+      String(order.id || '').toUpperCase().startsWith('DEP-') ||
+      String(order.invoice_id || '').toUpperCase().startsWith('DEP-')
+    );
+  };
+
+  const mapped = (orders || []).map((o: any) => ({
     id: o.id,
     customer_id: o.customer_id,
     source: o.source,
@@ -618,11 +650,102 @@ export async function supabaseListOrdersWithRelations(): Promise<OrderWithRelati
     payment_mode: o.payment_mode,
     bill_date: o.bill_date,
     created_at: o.created_at,
+    is_advance: o.is_advance,
+    order_type: o.order_type,
     customer_name: o.customers?.name || 'Walk-in Customer',
     customer_phone: o.customers?.phone || '',
     customer_address: o.customers?.address || null,
     items: (o.order_items || []) as OrderItemRow[],
   })) as OrderWithRelations[];
+
+  const dedupedOrdersMap = new Map<string, OrderWithRelations>();
+  for (const o of mapped) {
+    if (!o.id) continue;
+    const isAdvance = isAdvanceOrderRow(o);
+    const status = String(o.status || '').toUpperCase();
+    if (isAdvance) {
+      if (status === 'COMPLETED') {
+        dedupedOrdersMap.set(o.id, o);
+      }
+    } else {
+      if (
+        status === 'COMPLETED' ||
+        (!o.status && status !== 'CANCELLED' && status !== 'PENDING' && status !== 'READY')
+      ) {
+        dedupedOrdersMap.set(o.id, o);
+      }
+    }
+  }
+
+  try {
+    const { data: compAdvances } = await supabase
+      .from('advance_orders')
+      .select(`
+        *,
+        customers (
+          name,
+          phone,
+          address
+        ),
+        advance_order_items (
+          id,
+          advance_order_id,
+          product_id,
+          snapshot_name,
+          snapshot_price,
+          quantity
+        )
+      `)
+      .ilike('status', 'COMPLETED');
+
+    if (compAdvances && compAdvances.length > 0) {
+      for (const a of compAdvances) {
+        if (!a.id) continue;
+        if (!dedupedOrdersMap.has(a.id) && (!a.finalized_order_id || !dedupedOrdersMap.has(a.finalized_order_id))) {
+          dedupedOrdersMap.set(a.id, {
+            id: a.id,
+            customer_id: a.customer_id,
+            source: 'OFFLINE',
+            status: 'COMPLETED',
+            is_gst: false,
+            subtotal: Number(a.subtotal) || 0,
+            discount_type: 'FIXED',
+            discount_value: 0,
+            discount_amount: 0,
+            gst_percentage: 0,
+            gst_amount: 0,
+            delivery_fee: 0,
+            grand_total: Number(a.total_amount ?? a.deposit_amount ?? 0),
+            cash_received: Number(a.total_amount ?? a.deposit_amount ?? 0),
+            split_cash: 0,
+            split_gpay: 0,
+            payment_mode: a.deposit_payment_mode || 'CASH',
+            bill_date: a.finalized_at ? a.finalized_at.split('T')[0] : (a.created_at ? a.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+            created_at: a.created_at || new Date().toISOString(),
+            is_advance: true,
+            order_type: 'ADVANCE',
+            customer_name: a.customers?.name || 'Walk-in Customer',
+            customer_phone: a.customers?.phone || '',
+            customer_address: a.customers?.address || null,
+            items: (a.advance_order_items || []).map((it: any) => ({
+              id: it.id,
+              order_id: a.id,
+              product_id: it.product_id || null,
+              snapshot_name: it.snapshot_name,
+              snapshot_price: Number(it.snapshot_price) || 0,
+              quantity: Number(it.quantity) || 1,
+            })),
+          });
+        }
+      }
+    }
+  } catch (advFetchErr) {
+    // Ignore secondary fetch error
+  }
+
+  const resultList = Array.from(dedupedOrdersMap.values());
+  resultList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  return resultList;
 }
 
 export async function supabaseGetOrderWithRelations(id: string): Promise<OrderWithRelations | null> {
@@ -806,7 +929,11 @@ export async function supabaseListAdvanceOrders(): Promise<AdvanceOrderWithRelat
       items: (r.advance_order_items || []) as AdvanceOrderItemRow[],
     }));
 
-    const existingIds = new Set(advList.map((a) => a.id));
+    const existingIds = new Set<string>();
+    for (const a of advList) {
+      if (a.id) existingIds.add(a.id);
+      if (a.finalized_order_id) existingIds.add(a.finalized_order_id);
+    }
 
     try {
       const { data: orderRows } = await supabase
@@ -832,7 +959,8 @@ export async function supabaseListAdvanceOrders(): Promise<AdvanceOrderWithRelat
 
       if (orderRows && orderRows.length > 0) {
         for (const o of orderRows) {
-          if (!existingIds.has(o.id)) {
+          const isKnown = existingIds.has(o.id) || (o.invoice_id && existingIds.has(o.invoice_id));
+          if (!isKnown) {
             advList.push({
               id: o.id,
               customer_id: o.customer_id,
@@ -861,6 +989,7 @@ export async function supabaseListAdvanceOrders(): Promise<AdvanceOrderWithRelat
               })),
             });
             existingIds.add(o.id);
+            if (o.invoice_id) existingIds.add(o.invoice_id);
           }
         }
       }
@@ -868,8 +997,16 @@ export async function supabaseListAdvanceOrders(): Promise<AdvanceOrderWithRelat
       // Ignore secondary check errors
     }
 
-    advList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-    return advList;
+    // Deduplicate by ID to guarantee one row per parent advance order
+    const uniqueAdvMap = new Map<string, AdvanceOrderWithRelations>();
+    for (const a of advList) {
+      if (!a.id || uniqueAdvMap.has(a.id)) continue;
+      uniqueAdvMap.set(a.id, a);
+    }
+    const dedupedAdvList = Array.from(uniqueAdvMap.values());
+
+    dedupedAdvList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+    return dedupedAdvList;
   } catch (err) {
     console.error('[Supabase] listAdvanceOrders exception:', err);
     return [];
@@ -1049,12 +1186,109 @@ export async function supabaseCreateAdvanceOrder(payload: {
 }
 
 export async function supabaseUpdateAdvanceOrderStatus(id: string, status: AdvanceOrderStatus): Promise<void> {
+  const statusUpper = String(status || '').trim().toUpperCase() as AdvanceOrderStatus;
+  const { data: advData } = await supabase
+    .from('advance_orders')
+    .select('total_amount, subtotal')
+    .eq('id', id)
+    .maybeSingle();
+
+  const totalAmount = Number(advData?.total_amount ?? advData?.subtotal ?? 0);
+
+  const advUpdates: any = {
+    status: statusUpper,
+  };
+  if (statusUpper === 'COMPLETED') {
+    advUpdates.finalized_at = new Date().toISOString();
+    if (totalAmount > 0) {
+      advUpdates.deposit_amount = totalAmount;
+    }
+  } else if (statusUpper === 'CANCELLED') {
+    advUpdates.cancelled_at = new Date().toISOString();
+  }
+
   const { error } = await supabase
     .from('advance_orders')
-    .update({ status })
+    .update(advUpdates)
     .eq('id', id);
 
-  if (error) throw new Error(error.message);
+  if (error) {
+    console.error('[Supabase] Failed to update advance_orders status:', error);
+    throw new Error(`Failed to update advance order status: ${error.message}`);
+  }
+
+  try {
+    const { data: existingOrder } = await supabase
+      .from('orders')
+      .select('id')
+      .eq('id', id)
+      .maybeSingle();
+
+    if (statusUpper === 'COMPLETED') {
+      const orderUpdates: any = {
+        status: 'COMPLETED',
+      };
+      if (totalAmount > 0) {
+        orderUpdates.cash_received = totalAmount;
+        orderUpdates.grand_total = totalAmount;
+      }
+
+      if (existingOrder) {
+        await supabase
+          .from('orders')
+          .update(orderUpdates)
+          .eq('id', id);
+      } else {
+        const fullAdv = await supabaseGetAdvanceOrder(id);
+        if (fullAdv) {
+          const orderPayload: any = {
+            id: id,
+            customer_id: fullAdv.customer_id,
+            source: 'OFFLINE',
+            status: 'COMPLETED',
+            is_gst: false,
+            subtotal: Number(fullAdv.subtotal) || totalAmount,
+            discount_type: 'FIXED',
+            discount_value: 0,
+            discount_amount: 0,
+            gst_percentage: 0,
+            gst_amount: 0,
+            delivery_fee: 0,
+            grand_total: totalAmount,
+            cash_received: totalAmount,
+            payment_mode: fullAdv.deposit_payment_mode || 'CASH',
+            bill_date: new Date().toISOString().split('T')[0],
+            is_advance: true,
+            order_type: 'ADVANCE',
+            invoice_id: id,
+            created_at: fullAdv.created_at || new Date().toISOString(),
+          };
+          await supabase.from('orders').upsert(orderPayload);
+
+          if (fullAdv.items && fullAdv.items.length > 0) {
+            const itemsToInsert = fullAdv.items.map((it: any, idx: number) => ({
+              id: `oi-${id}-${idx}`,
+              order_id: id,
+              product_id: it.product_id || null,
+              snapshot_name: it.snapshot_name,
+              snapshot_price: Number(it.snapshot_price) || 0,
+              quantity: Number(it.quantity) || 1,
+            }));
+            await supabase.from('order_items').upsert(itemsToInsert);
+          }
+        }
+      }
+    } else {
+      if (existingOrder) {
+        await supabase
+          .from('orders')
+          .update({ status: statusUpper })
+          .eq('id', id);
+      }
+    }
+  } catch (err) {
+    console.error('Failed to sync advance order status to orders table:', err);
+  }
 }
 
 export async function supabaseCancelAdvanceOrder(id: string): Promise<void> {
@@ -1107,34 +1341,79 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
       : 0;
   const grandTotal = netInclusive + payload.deliveryFee;
 
-  const { orderId } = await supabaseSubmitOrder({
-    orderId: payload.invoiceId,
-    customerName: advance.customer_name,
-    customerPhone: advance.customer_phone,
-    customerAddress: advance.customer_address,
-    source: 'OFFLINE',
-    isGst: payload.isGst,
-    billDate: payload.billDate,
-    items: cart,
-    discountType: payload.discountType,
-    discountValue: payload.discountValue,
-    discountAmount: payload.discountAmount,
-    gstPercentage: payload.isGst ? payload.gstPercentage : 0,
-    gstAmount,
-    deliveryFee: payload.deliveryFee,
-    grandTotal,
-    cashReceived: grandTotal,
-    paymentMode: payload.paymentMode,
-  });
+  // Update the existing advance order row ID directly.
+  // Do NOT insert a separate order with a new ID that would spawn a duplicate order!
+  const targetOrderId = payload.advanceOrderId;
 
-  await supabase
+  // 1. Update existing advance_orders row
+  const { error: advErr } = await supabase
     .from('advance_orders')
     .update({
       status: 'COMPLETED',
-      finalized_order_id: orderId,
+      subtotal: rawSubtotal,
+      total_amount: grandTotal,
+      deposit_amount: grandTotal,
+      finalized_order_id: targetOrderId,
       finalized_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
     })
-    .eq('id', payload.advanceOrderId);
+    .eq('id', targetOrderId);
 
-  return { orderId };
+  if (advErr) {
+    await supabase
+      .from('advance_orders')
+      .update({
+        status: 'COMPLETED',
+        subtotal: rawSubtotal,
+        total_amount: grandTotal,
+        deposit_amount: grandTotal,
+        finalized_order_id: targetOrderId,
+        finalized_at: new Date().toISOString(),
+      })
+      .eq('id', targetOrderId);
+  }
+
+  // 2. Update existing orders row
+  const orderPayload: any = {
+    id: targetOrderId,
+    customer_id: advance.customer_id,
+    source: 'OFFLINE',
+    status: 'COMPLETED',
+    is_gst: Boolean(payload.isGst),
+    subtotal: rawSubtotal,
+    discount_type: payload.discountType,
+    discount_value: payload.discountValue,
+    discount_amount: payload.discountAmount,
+    gst_percentage: payload.isGst ? payload.gstPercentage : 0,
+    gst_amount: gstAmount,
+    delivery_fee: payload.deliveryFee,
+    grand_total: grandTotal,
+    cash_received: grandTotal,
+    payment_mode: payload.paymentMode,
+    bill_date: payload.billDate ? payload.billDate.split('T')[0] : new Date().toISOString().split('T')[0],
+    is_advance: true,
+    order_type: 'ADVANCE',
+    invoice_id: payload.invoiceId || targetOrderId,
+  };
+
+  await supabase
+    .from('orders')
+    .upsert(orderPayload, { onConflict: 'id' });
+
+  // 3. Clean up and refresh order_items for targetOrderId
+  const itemsToInsert = cart.map((item) => ({
+    id: uid(),
+    order_id: targetOrderId,
+    product_id: item.product_id || null,
+    snapshot_name: item.name || 'Advance Item',
+    snapshot_price: Number(item.price) || 0,
+    quantity: Number(item.qty) || 1,
+  }));
+
+  if (itemsToInsert.length > 0) {
+    await supabase.from('order_items').delete().eq('order_id', targetOrderId);
+    await supabase.from('order_items').insert(itemsToInsert);
+  }
+
+  return { orderId: targetOrderId };
 }

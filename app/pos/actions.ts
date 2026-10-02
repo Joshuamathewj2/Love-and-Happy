@@ -1,5 +1,6 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { dbStore } from "@/lib/dbStore";
 import { supabaseFetchCategories, supabaseFetchProducts, supabaseSeedCatalog } from "@/lib/supabaseActions";
 import { Product, OrderWithRelations, CartItem, Expense, PaymentMode, Category, AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
@@ -179,19 +180,41 @@ export async function createAdvanceOrder(payload: {
     quantity: number;
   }[];
 }): Promise<{ advanceOrderId: string }> {
-  return await dbStore.createAdvanceOrder(payload);
+  const result = await dbStore.createAdvanceOrder(payload);
+  try {
+    revalidatePath('/admin/advance-orders');
+  } catch (e) {}
+  return result;
 }
 
 export async function setAdvanceOrderStatus(id: string, status: AdvanceOrderStatus): Promise<void> {
-  return await dbStore.updateAdvanceOrderStatus(id, status);
+  const result = await dbStore.updateAdvanceOrderStatus(id, status);
+  try {
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/analytics');
+    revalidatePath('/admin/advance-orders');
+  } catch (e) {}
+  return result;
 }
 
 export async function cancelAdvanceOrder(id: string): Promise<void> {
-  return await dbStore.cancelAdvanceOrder(id);
+  const result = await dbStore.cancelAdvanceOrder(id);
+  try {
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/analytics');
+    revalidatePath('/admin/advance-orders');
+  } catch (e) {}
+  return result;
 }
 
 export async function removeAdvanceOrder(id: string): Promise<void> {
-  return await dbStore.deleteAdvanceOrder(id);
+  const result = await dbStore.deleteAdvanceOrder(id);
+  try {
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/analytics');
+    revalidatePath('/admin/advance-orders');
+  } catch (e) {}
+  return result;
 }
 
 export async function finalizeAdvanceOrder(payload: {
@@ -206,5 +229,11 @@ export async function finalizeAdvanceOrder(payload: {
   paymentMode: PaymentMode;
   billDate: string;
 }): Promise<{ orderId: string }> {
-  return await dbStore.finalizeAdvanceOrder(payload);
+  const result = await dbStore.finalizeAdvanceOrder(payload);
+  try {
+    revalidatePath('/admin/orders');
+    revalidatePath('/admin/analytics');
+    revalidatePath('/admin/advance-orders');
+  } catch (e) {}
+  return result;
 }

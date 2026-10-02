@@ -104,6 +104,7 @@ export interface PrintableReceiptProps {
     discount_amount?: number;
     is_gst?: boolean;
     gst_rate?: number;
+    gst_percentage?: number;
     gst_amount?: number;
     delivery_fee?: number;
     total_amount?: number;
@@ -115,13 +116,30 @@ export interface PrintableReceiptProps {
 }
 
 export default function PrintableReceipt({ order }: PrintableReceiptProps) {
-  const subtotal =
+  const formatINR = (val: number) =>
+    Number(val || 0).toLocaleString("en-IN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
+  const itemsSubtotal =
     Number(order.subtotal) ||
     order.items.reduce(
       (sum, i) => sum + Number(i.snapshot_price) * (i.quantity || 1),
       0
     );
-  const total = Number(order.total_amount ?? subtotal);
+  const discountAmount = Number(order.discount_amount) || 0;
+  const deliveryFee = Number(order.delivery_fee) || 0;
+  const isGst = Boolean(order.is_gst);
+  const gstRate = Number(order.gst_percentage ?? order.gst_rate ?? (isGst ? 18 : 0));
+  const gstAmount = Number(order.gst_amount) || 0;
+  const halfGstRate = gstRate > 0 ? gstRate / 2 : 0;
+  const halfGstAmount = gstAmount > 0 ? gstAmount / 2 : 0;
+
+  const total = Number(order.total_amount ?? (order as any).grand_total ?? itemsSubtotal);
+  const taxableValue = isGst && gstAmount > 0 && Math.abs(total - (itemsSubtotal - discountAmount + deliveryFee)) < 0.05
+    ? itemsSubtotal - discountAmount - gstAmount
+    : itemsSubtotal - discountAmount;
   const amountReceived = Number(
     order.cash_received ?? order.amount_received ?? total
   );
@@ -211,10 +229,10 @@ export default function PrintableReceipt({ order }: PrintableReceiptProps) {
                     {item.quantity}
                   </td>
                   <td className="py-3 text-right font-mono text-zinc-600">
-                    ₹{unitPrice.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                    ₹{formatINR(unitPrice)}
                   </td>
                   <td className="py-3 text-right font-mono font-semibold text-zinc-900">
-                    ₹{itemTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                    ₹{formatINR(itemTotal)}
                   </td>
                 </tr>
               );
@@ -241,21 +259,21 @@ export default function PrintableReceipt({ order }: PrintableReceiptProps) {
             <div>
               <span className="text-slate-500 text-xs">Cash Received: </span>
               <span className="font-bold text-slate-900">
-                ₹{amountReceived.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ₹{formatINR(amountReceived)}
               </span>
             </div>
             {amountReceived >= total ? (
               <div>
                 <span className="text-slate-500 text-xs">Change Returned: </span>
                 <span className="font-bold text-slate-900">
-                  ₹{changeReturned.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ₹{formatINR(changeReturned)}
                 </span>
               </div>
             ) : (
               <div>
                 <span className="text-slate-500 text-xs">Balance Due: </span>
                 <span className="font-bold text-rose-600">
-                  ₹{balanceDue.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  ₹{formatINR(balanceDue)}
                 </span>
               </div>
             )}
@@ -269,23 +287,56 @@ export default function PrintableReceipt({ order }: PrintableReceiptProps) {
           </div>
         </div>
 
-        {/* Right Side: Subtotal & Grand Total Block */}
+        {/* Right Side: Financial Lines & Grand Total Block */}
         <div className="w-full sm:w-64 space-y-2 text-xs">
           <div className="flex justify-between text-slate-600">
-            <span>Subtotal</span>
+            <span>Items Subtotal / Taxable Value</span>
             <span className="font-mono text-slate-900 font-medium">
-              ₹{subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ₹{formatINR(taxableValue)}
             </span>
           </div>
 
-          <div className="border-t border-slate-900 my-2" />
+          {discountAmount > 0 && (
+            <div className="flex justify-between text-slate-600">
+              <span>Discount</span>
+              <span className="font-mono text-rose-600 font-medium">
+                -₹{formatINR(discountAmount)}
+              </span>
+            </div>
+          )}
 
-          <div className="flex justify-between items-baseline">
+          {isGst && gstAmount > 0 && (
+            <>
+              <div className="flex justify-between text-slate-600">
+                <span>CGST ({halfGstRate.toFixed(1)}%)</span>
+                <span className="font-mono text-slate-900 font-medium">
+                  ₹{formatINR(halfGstAmount)}
+                </span>
+              </div>
+              <div className="flex justify-between text-slate-600">
+                <span>SGST ({halfGstRate.toFixed(1)}%)</span>
+                <span className="font-mono text-slate-900 font-medium">
+                  ₹{formatINR(halfGstAmount)}
+                </span>
+              </div>
+            </>
+          )}
+
+          {deliveryFee > 0 && (
+            <div className="flex justify-between text-slate-600">
+              <span>Delivery / Freight</span>
+              <span className="font-mono text-slate-900 font-medium">
+                ₹{formatINR(deliveryFee)}
+              </span>
+            </div>
+          )}
+
+          <div className="border-t-2 border-b-4 border-double border-slate-900 py-2 mt-2 flex justify-between items-baseline">
             <span className="font-black text-sm tracking-wider uppercase text-black">
-              TOTAL
+              GRAND TOTAL
             </span>
             <span className="font-mono font-black text-base text-black">
-              ₹{total.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              ₹{formatINR(total)}
             </span>
           </div>
         </div>
