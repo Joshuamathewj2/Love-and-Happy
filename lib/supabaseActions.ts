@@ -858,16 +858,17 @@ export async function supabaseUpdateExpense(id: string, patch: Partial<Expense>)
     updatePayload.expense_date = patch.expense_date.split('T')[0];
   }
 
+  // Omit updated_at since it's not in the schema
   const { data, error } = await supabase
     .from('expenses')
     .update(updatePayload)
     .eq('id', id)
     .select()
-    .single();
+    .maybeSingle();
 
-  if (error) {
+  if (error || !data) {
     console.error('[Supabase] updateExpense error:', error);
-    throw new Error(error.message || 'Failed to update expense');
+    throw new Error(error?.message ?? 'Update affected 0 rows (check RLS UPDATE policy)');
   }
   return data as Expense;
 }

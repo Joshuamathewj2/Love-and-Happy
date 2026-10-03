@@ -63,6 +63,7 @@ import {
   removeProduct,
   fetchExpenses,
   createExpense,
+  editExpense,
   removeExpense,
   fetchCategories,
   createCategory,
@@ -468,6 +469,7 @@ export default function POSBilling() {
 
   // Expense tracker state
   const [expenses, setExpenses] = useState<Expense[]>([]);
+  const [editingExpenseId, setEditingExpenseId] = useState<string | null>(null);
   const [expTitle, setExpTitle] = useState("");
   const [expCategory, setExpCategory] = useState<string>(EXPENSE_CATEGORIES[0]);
   const [expCustomCategory, setExpCustomCategory] = useState("");
@@ -1808,6 +1810,37 @@ export default function POSBilling() {
   };
 
   // ── Expense tracker: handlers ──────────────────────────────────────
+  const openEditExpense = (e: Expense) => {
+    setEditingExpenseId(e.id);
+    setExpTitle(e.title);
+    setExpAmount(Number(e.amount));
+    setExpDate(new Date(e.expense_date).toISOString().split("T")[0]);
+    if (EXPENSE_CATEGORIES.includes(e.category as any)) {
+      setExpCategory(e.category);
+      setExpCustomCategory("");
+    } else {
+      setExpCategory("__custom__");
+      setExpCustomCategory(e.category);
+    }
+    setExpPaymentMode(e.payment_mode);
+    setExpNotes(e.notes || "");
+    // If not using a modal, scroll to the form (if needed, but prompt says open modal)
+    // Actually, prompt says "Clicking Edit opens a modal (or reuses the existing Add Expense form) in EDIT mode."
+    // We reuse the existing Add Expense form inline.
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const cancelEditExpense = () => {
+    setEditingExpenseId(null);
+    setExpTitle("");
+    setExpAmount("");
+    setExpNotes("");
+    setExpCategory(EXPENSE_CATEGORIES[0]);
+    setExpCustomCategory("");
+    setExpPaymentMode("CASH");
+    setExpDate(new Date().toISOString().split("T")[0]);
+  };
+
   const handleAddExpense = async () => {
     const amountNum =
       typeof expAmount === "number" ? expAmount : parseFloat(String(expAmount));
@@ -1824,29 +1857,62 @@ export default function POSBilling() {
     }
     setIsSavingExpense(true);
     try {
-      const created = await createExpense({
-        title: expTitle.trim(),
-        category,
-        amount: amountNum,
-        payment_mode: expPaymentMode,
-        notes: expNotes.trim() || null,
-        expense_date: expDate,
-      });
-      setExpenses((prev) => [
-        { ...created, amount: Number(created.amount) || 0 },
-        ...prev,
-      ]);
-      // Keep category / payment mode / date for fast repeat entry
-      setExpTitle("");
-      setExpAmount("");
-      setExpNotes("");
-      if (expCategory === "__custom__") {
-        setExpCategory(category);
-        setExpCustomCategory("");
+      if (editingExpenseId) {
+        const updated = await editExpense(editingExpenseId, {
+          title: expTitle.trim(),
+          category,
+          amount: amountNum,
+          payment_mode: expPaymentMode,
+          notes: expNotes.trim() || null,
+          expense_date: expDate,
+        });
+        if (updated) {
+          setExpenses((prev) =>
+            prev.map((e) =>
+              e.id === editingExpenseId ? { ...updated, amount: Number(updated.amount) || 0 } : e
+            )
+          );
+          router.refresh();
+          
+          // Toast or simple alert
+          const toast = document.createElement('div');
+          toast.className = 'fixed bottom-4 right-4 bg-[#0097A7] text-white px-4 py-2 rounded shadow-lg z-50';
+          toast.textContent = 'Expense updated';
+          document.body.appendChild(toast);
+          setTimeout(() => toast.remove(), 3000);
+          
+          cancelEditExpense();
+        }
+      } else {
+        const created = await createExpense({
+          title: expTitle.trim(),
+          category,
+          amount: amountNum,
+          payment_mode: expPaymentMode,
+          notes: expNotes.trim() || null,
+          expense_date: expDate,
+        });
+        setExpenses((prev) => [
+          { ...created, amount: Number(created.amount) || 0 },
+          ...prev,
+        ]);
+        // Keep category / payment mode / date for fast repeat entry
+        setExpTitle("");
+        setExpAmount("");
+        setExpNotes("");
+        if (expCategory === "__custom__") {
+          setExpCategory(category);
+          setExpCustomCategory("");
+        }
       }
     } catch (err: any) {
-      console.error("SUPABASE ADD EXPENSE ERROR:", err);
-      alert(`Could not save the expense: ${err?.message || "Please try again."}`);
+      console.error("SUPABASE ADD/EDIT EXPENSE ERROR:", err);
+      // Show error toast on failure, keeping modal/form open
+      const toast = document.createElement('div');
+      toast.className = 'fixed bottom-4 right-4 bg-[#B91C1C] text-white px-4 py-2 rounded shadow-lg z-50';
+      toast.textContent = err?.message || "Please try again.";
+      document.body.appendChild(toast);
+      setTimeout(() => toast.remove(), 4000);
     } finally {
       setIsSavingExpense(false);
     }
@@ -6703,7 +6769,7 @@ export default function POSBilling() {
               <div className="lg:col-span-2 bg-white border border-black/10 rounded-2xl p-5 shadow-sm h-fit">
                 <h3 className="text-sm font-black text-[#000000] uppercase tracking-wider flex items-center gap-2 mb-4">
                   <span className="w-1.5 h-6 bg-[#0097A7] rounded-full" />
-                  Add Expense
+                  {editingExpenseId ? "Edit Expense" : "Add Expense"}
                 </h3>
                 <div className="space-y-3">
                   <div>
@@ -6810,14 +6876,27 @@ export default function POSBilling() {
                       className="w-full bg-[#FAFAFA] border border-black/10 rounded-lg px-3 py-2 text-sm text-[#000000] focus:outline-none focus:border-[#0097A7] placeholder:text-black/30"
                     />
                   </div>
-                  <button
-                    onClick={handleAddExpense}
-                    disabled={isSavingExpense}
-                    className="w-full mt-1 bg-[#0097A7] hover:bg-[#27272A] disabled:opacity-60 text-white py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 transition-transform active:scale-[0.98] shadow-sm cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    {isSavingExpense ? "Saving…" : "Add Expense"}
-                  </button>
+                  <div className="flex gap-2 mt-1">
+                    <button
+                      type="button"
+                      onClick={handleAddExpense}
+                      disabled={isSavingExpense}
+                      className="flex-1 bg-[#0097A7] hover:bg-[#27272A] disabled:opacity-60 text-white py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 transition-transform active:scale-[0.98] shadow-sm cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      {isSavingExpense ? "Saving…" : (editingExpenseId ? "Save Changes" : "Add Expense")}
+                    </button>
+                    {editingExpenseId && (
+                      <button
+                        type="button"
+                        onClick={cancelEditExpense}
+                        disabled={isSavingExpense}
+                        className="flex-1 bg-[#FAFAFA] border border-black/10 hover:bg-black/5 disabled:opacity-60 text-[#000000] py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.1em] flex items-center justify-center transition-transform active:scale-[0.98] cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -6991,13 +7070,25 @@ export default function POSBilling() {
                             })}
                           </td>
                           <td className="p-3 text-center">
-                            <button
-                              onClick={() => handleDeleteExpense(e.id)}
-                              title="Delete expense"
-                              className="inline-flex items-center justify-center w-8 h-8 bg-[#B91C1C]/10 hover:bg-[#B91C1C]/20 text-[#B91C1C] rounded-md transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openEditExpense(e)}
+                                title="Edit expense"
+                                aria-label="Edit expense"
+                                className="inline-flex items-center justify-center w-8 h-8 bg-amber-500/10 hover:bg-amber-500/20 text-amber-600 rounded-md transition-colors cursor-pointer"
+                              >
+                                <Pencil className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteExpense(e.id)}
+                                title="Delete expense"
+                                className="inline-flex items-center justify-center w-8 h-8 bg-[#B91C1C]/10 hover:bg-[#B91C1C]/20 text-[#B91C1C] rounded-md transition-colors cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       ))}
