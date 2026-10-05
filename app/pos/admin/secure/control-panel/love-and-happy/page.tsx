@@ -78,6 +78,8 @@ import {
 } from "@/app/pos/actions";
 import { Product, Expense, Category, AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
 import { LOVE_AND_HAPPY_CATEGORIES, LOVE_AND_HAPPY_CATALOG_ITEMS } from "@/lib/catalogData";
+import { calculateAdvanceOrderTotals } from "@/lib/advanceOrderCalculations";
+import { INVOICE_TERMS_AND_NOTES } from "@/lib/constants";
 
 // Preset expense categories (users can also type a custom one)
 const EXPENSE_CATEGORIES = [
@@ -413,6 +415,14 @@ export default function POSBilling() {
   const [receivePaymentMode, setReceivePaymentMode] = useState<OrderPaymentMode>("CASH");
   const [receiveIsGst, setReceiveIsGst] = useState(false);
   const [receiveGstPct, setReceiveGstPct] = useState<number>(18);
+  const [receiveCouponCode, setReceiveCouponCode] = useState<string>("");
+  const [appliedCoupon, setAppliedCoupon] = useState<{
+    code: string;
+    type: "fixed" | "percent";
+    value: number;
+  } | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [receivePaymentNotes, setReceivePaymentNotes] = useState<string>("");
   const [isFinalizing, setIsFinalizing] = useState(false);
   const isFinalizingLock = useRef(false);
 
@@ -1206,13 +1216,26 @@ export default function POSBilling() {
     isSavingAdvanceLock.current = true;
     setIsSavingAdvance(true);
     try {
+      const currentCalc = calculateAdvanceOrderTotals({
+        items: items.map((i) => ({ price: Number(i.price) || 0, qty: Number(i.qty) || 1 })),
+        isGst: applyGST,
+        gstPercentage: applyGST ? Number(gstPercentage) || 0 : 0,
+        taxMode: taxMode,
+        manualDiscount:
+          discountValue > 0
+            ? { type: (discountType || "FIXED").toUpperCase() as any, value: Number(discountValue) }
+            : null,
+        deliveryFee: Number(deliveryFee) || 0,
+        advanceAmount: deposit,
+      });
+
       await createAdvanceOrder({
         advanceOrderId: advId,
         customerName: customerName.trim() || "Guest",
         customerPhone,
         customerAddress: customerAddress || null,
-        subtotal,
-        totalAmount: grandTotal,
+        subtotal: currentCalc.subtotal,
+        totalAmount: currentCalc.grandTotal,
         depositAmount: deposit,
         depositPaymentMode: advDepositPaymentMode,
         deliveryDate: advDeliveryDate || null,
@@ -1221,9 +1244,17 @@ export default function POSBilling() {
           product_id: i.product_id || null,
           snapshot_name: i.name,
           snapshot_desc: i.desc || null,
-          snapshot_price: i.price,
-          quantity: i.qty,
+          snapshot_price: Number(i.price) || 0,
+          quantity: Number(i.qty) || 1,
         })),
+        isGst: currentCalc.gstPercentage > 0,
+        gstPercentage: currentCalc.gstPercentage,
+        gstAmount: currentCalc.gstAmount,
+        taxMode: taxMode,
+        discountType: (discountType || "FIXED").toUpperCase() as "PERCENT" | "FIXED",
+        discountValue: Number(discountValue) || 0,
+        discountAmount: currentCalc.discountAmount,
+        deliveryFee: currentCalc.deliveryFee,
       });
 
       // Capture receipt details before clearing the form.
@@ -1253,8 +1284,8 @@ export default function POSBilling() {
         customer_phone: receiptCustomerPhone,
         customer_address: customerAddress || null,
         status: "PENDING",
-        subtotal: Number(subtotal) || 0,
-        total_amount: Number(grandTotal) || 0,
+        subtotal: currentCalc.subtotal,
+        total_amount: currentCalc.grandTotal,
         deposit_amount: Number(deposit) || 0,
         deposit_payment_mode: advDepositPaymentMode,
         delivery_date: advDeliveryDate || null,
@@ -1272,6 +1303,14 @@ export default function POSBilling() {
           snapshot_price: Number(i.price) || 0,
           quantity: Number(i.qty) || 1,
         })),
+        is_gst: currentCalc.gstPercentage > 0,
+        gst_percentage: currentCalc.gstPercentage,
+        gst_amount: currentCalc.gstAmount,
+        tax_mode: taxMode,
+        discount_type: (discountType || "FIXED").toUpperCase() as "PERCENT" | "FIXED",
+        discount_value: Number(discountValue) || 0,
+        discount_amount: currentCalc.discountAmount,
+        delivery_fee: currentCalc.deliveryFee,
       };
       setAdvanceOrders((prev) => [newAdvOrder, ...prev.filter((a) => a.id !== advId)]);
 
@@ -1285,9 +1324,9 @@ export default function POSBilling() {
         id: advId,
         customerName: receiptCustomerName,
         customerPhone: receiptCustomerPhone,
-        total: grandTotal,
-        deposit,
-        balance: Math.max(0, grandTotal - deposit),
+        total: currentCalc.grandTotal,
+        deposit: currentCalc.advancePaid,
+        balance: currentCalc.remainingBalance,
       });
     } catch (err: any) {
       console.error("SUPABASE SAVE ADVANCE ORDER ERROR:", err);
@@ -1298,14 +1337,42 @@ export default function POSBilling() {
     }
   };
 
+  const getAdvanceTotals = (adv: AdvanceOrderWithRelations) => {
+    return calculateAdvanceOrderTotals({
+      items: (adv.items || []).map((it) => ({
+        price: Number(it.snapshot_price) || 0,
+        qty: Number(it.quantity) || 1,
+      })),
+      subtotal: Number(adv.subtotal) || Number(adv.total_amount) || 0,
+      isGst: adv.is_gst !== undefined ? Boolean(adv.is_gst) : undefined,
+      gstPercentage: adv.gst_percentage !== undefined ? Number(adv.gst_percentage) : undefined,
+      taxMode: adv.tax_mode || "exclusive",
+      manualDiscount:
+        Number(adv.discount_amount) > 0 || Number(adv.discount_value) > 0
+          ? {
+              type: ((adv.discount_type || "FIXED").toUpperCase() as any),
+              value: Number(adv.discount_value) || Number(adv.discount_amount) || 0,
+            }
+          : null,
+      deliveryFee: Number(adv.delivery_fee) || 0,
+      advanceAmount: Number(adv.deposit_amount) || 0,
+      grandTotal: Number(adv.total_amount) || undefined,
+    });
+  };
+
   const openReceiveBalance = (adv: AdvanceOrderWithRelations) => {
     setSelectedAdvance(adv);
     setAdvanceViewMode("receive");
+    setReceiveCouponCode("");
+    setAppliedCoupon(null);
+    setCouponError(null);
     setReceiveDiscountType("FIXED");
     setReceiveDiscountValue("");
     setReceivePaymentMode("CASH");
-    setReceiveIsGst(false);
-    setReceiveGstPct(18);
+    setReceivePaymentNotes("");
+    const totals = getAdvanceTotals(adv);
+    setReceiveIsGst(totals.gstPercentage > 0);
+    setReceiveGstPct(totals.gstPercentage || 18);
   };
 
   const openAdvanceView = (adv: AdvanceOrderWithRelations) => {
@@ -1316,35 +1383,76 @@ export default function POSBilling() {
   const closeAdvanceDialog = () => {
     setSelectedAdvance(null);
     setAdvanceViewMode(null);
+    setReceiveCouponCode("");
+    setAppliedCoupon(null);
+    setCouponError(null);
+    setAdvanceOrders((prev) => [...prev]);
   };
 
-  const balanceRemaining = (adv: AdvanceOrderWithRelations) =>
-    Math.max(0, Number(adv.total_amount) - Number(adv.deposit_amount));
+  const balanceRemaining = (adv: AdvanceOrderWithRelations) => {
+    return getAdvanceTotals(adv).remainingBalance;
+  };
 
-  const receiveBalanceDiscountAmount = (() => {
-    if (!selectedAdvance) return 0;
-    const base = balanceRemaining(selectedAdvance);
-    const val = Number(receiveDiscountValue) || 0;
-    return receiveDiscountType === "PERCENT" ? base * (val / 100) : val;
-  })();
-
-  const receiveBalanceFinalAmount = (() => {
-    if (!selectedAdvance) return 0;
-    return Math.max(0, balanceRemaining(selectedAdvance) - receiveBalanceDiscountAmount);
+  const settlementCalc = (() => {
+    if (!selectedAdvance) {
+      return calculateAdvanceOrderTotals({ subtotal: 0, advanceAmount: 0 });
+    }
+    const baseTotals = getAdvanceTotals(selectedAdvance);
+    return calculateAdvanceOrderTotals({
+      items: (selectedAdvance.items || []).map((it) => ({
+        price: Number(it.snapshot_price) || 0,
+        qty: Number(it.quantity) || 1,
+      })),
+      subtotal: baseTotals.subtotal,
+      isGst: receiveIsGst,
+      gstPercentage: receiveIsGst ? receiveGstPct : 0,
+      taxMode: selectedAdvance.tax_mode || "exclusive",
+      deliveryFee: Number(selectedAdvance.delivery_fee) || 0,
+      couponDiscount: appliedCoupon ? { type: appliedCoupon.type, value: appliedCoupon.value } : null,
+      manualDiscount:
+        receiveDiscountValue !== "" && Number(receiveDiscountValue) > 0
+          ? { type: receiveDiscountType, value: Number(receiveDiscountValue) }
+          : null,
+      advanceAmount: Number(selectedAdvance.deposit_amount) || 0,
+    });
   })();
 
   const confirmReceiveBalance = async () => {
     if (!selectedAdvance || isFinalizingLock.current || isFinalizing) return;
-    if (receiveBalanceDiscountAmount > balanceRemaining(selectedAdvance)) {
-      alert("Discount cannot exceed the remaining balance.");
-      isFinalizingLock.current = false;
-      setIsFinalizing(false);
+    if (!settlementCalc.isValid) {
+      alert(settlementCalc.errorMessage || "Discount is too high. Cannot exceed remaining amount.");
       return;
     }
     isFinalizingLock.current = true;
     setIsFinalizing(true);
     try {
-      const invoiceId = `INV-${new Date().getFullYear()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+      const yr = new Date().getFullYear();
+      const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
+      const invoiceId = `INV-${yr}-${rand}`;
+
+      // Open WhatsApp directly from click handler to avoid popup blockers
+      const cleanPhone = (selectedAdvance.customer_phone || "").replace(/\D/g, "").slice(-10);
+      let waUrl = "";
+      if (cleanPhone) {
+        const shopEmoji = String.fromCodePoint(0x2728);
+        const checkEmoji = String.fromCodePoint(0x2705);
+        let msg = `${shopEmoji} *Love & Happy Unisex Salon* ${shopEmoji}\n\n`;
+        msg += `${checkEmoji} *Payment Received & Order Completed!*\n\n`;
+        msg += `Customer: ${selectedAdvance.customer_name || "Valued Customer"}\n`;
+        msg += `Deposit ID: ${selectedAdvance.id}\n`;
+        msg += `Official Invoice: ${invoiceId}\n`;
+        msg += `Amount Paid Now: ₹${settlementCalc.remainingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n`;
+        msg += `Payment Method: ${receivePaymentMode === "GPAY" ? "UPI / GPay" : receivePaymentMode}\n`;
+        msg += `Total Bill: ₹${settlementCalc.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n`;
+        msg += `Balance Due: ₹0.00\n\n`;
+        msg += `Thank you for choosing Love & Happy Unisex Salon. We look forward to serving you again!`;
+        waUrl = `https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`;
+      }
+
+      if (waUrl) {
+        window.open(waUrl, "_blank");
+      }
+
       await finalizeAdvanceOrder({
         advanceOrderId: selectedAdvance.id,
         invoiceId,
@@ -1352,57 +1460,17 @@ export default function POSBilling() {
         gstPercentage: receiveIsGst ? receiveGstPct : 0,
         discountType: receiveDiscountType,
         discountValue: Number(receiveDiscountValue) || 0,
-        discountAmount: receiveBalanceDiscountAmount,
+        discountAmount: settlementCalc.discountAmount,
         deliveryFee: 0,
         paymentMode: receivePaymentMode,
         billDate: new Date().toISOString(),
       });
+
       closeAdvanceDialog();
       await fetchData();
 
-      // Open the shared completion modal (Print / WhatsApp / New Sale) for the new invoice.
-      try {
-        const created = (await fetchOrderById(selectedAdvance.id)) || (await fetchOrderById(invoiceId));
-        if (created) {
-          setCompletedBillData({
-            id: created.id,
-            customerName: created.customer_name || "Guest",
-            customerPhone: created.customer_phone,
-            customerAddress: created.customer_address || null,
-            source: created.source,
-            isGst: Boolean(created.is_gst),
-            items: created.items.map((i, idx) => ({
-              id: i.id || `oi-${created.id}-${idx}`,
-              name: i.snapshot_name,
-              desc: "",
-              price: Number(i.snapshot_price) || 0,
-              qty: Number(i.quantity) || 0,
-            })),
-            subtotal: Number(created.subtotal) || 0,
-            discount: Number(created.discount_amount) || 0,
-            discountType: created.discount_type,
-            discountValue: created.discount_value
-              ? Number(created.discount_value)
-              : undefined,
-            gstPercentage: Number(created.gst_percentage) || 0,
-            gstAmount: Number(created.gst_amount) || 0,
-            deliveryFee: Number(created.delivery_fee) || 0,
-            grandTotal: Number(created.grand_total) || 0,
-            cashReceived: Number(created.cash_received) || 0,
-            splitCash: Number((created as { split_cash?: number }).split_cash) || 0,
-            splitGpay: Number((created as { split_gpay?: number }).split_gpay) || 0,
-            paymentMode: (POS_PAYMENT_MODES as readonly string[]).includes(
-              String(created.payment_mode),
-            )
-              ? (created.payment_mode as OrderPaymentMode)
-              : "CASH",
-            date: created.bill_date,
-            createdAt: created.created_at,
-            status: "Completed",
-          });
-        }
-      } catch (mapErr) {
-        console.error("Could not open completion modal:", mapErr);
+      if (!waUrl) {
+        alert(`Payment confirmed! Official Invoice: ${invoiceId}. (No customer phone number for WhatsApp message).`);
       }
     } catch (err: any) {
       console.error("SUPABASE FINALIZE ADVANCE ORDER ERROR:", err);
@@ -1446,6 +1514,19 @@ export default function POSBilling() {
   };
 
   const handleStatusChange = async (orderId: string, newStatus: string) => {
+    const adv = advanceOrders.find((a) => a.id === orderId);
+    if (!adv) return;
+
+    if (newStatus === "COMPLETED") {
+      const totals = getAdvanceTotals(adv);
+      if (totals.remainingBalance > 0) {
+        // Do not update status immediately; open the Receive Remaining Payment popup
+        openReceiveBalance(adv);
+        setAdvanceOrders((prev) => [...prev]);
+        return;
+      }
+    }
+
     try {
       setAdvanceOrders((prev) =>
         prev.map((ord) => (ord.id === orderId ? { ...ord, status: newStatus as AdvanceOrderStatus } : ord))
@@ -2063,7 +2144,14 @@ export default function POSBilling() {
       analyticsGstFilter === "all" ||
       (analyticsGstFilter === "gst" ? o.isGst : !o.isGst);
 
-    const analyticsFilteredOrders = orders.filter((o) => {
+    // FIX 1: Analytics must ONLY include official invoices (starting with "INV-").
+    // Deposit IDs (DEP-*) must NEVER appear in analytics or have revenue counted before completion.
+    const analyticsEligibleOrders = orders.filter((o) => {
+      const id = String(o.id || "").toUpperCase();
+      return id.startsWith("INV-");
+    });
+
+    const analyticsFilteredOrders = analyticsEligibleOrders.filter((o) => {
       if (!passesGst(o)) return false;
       if (
         analyticsSearchPhone &&
@@ -2199,7 +2287,7 @@ export default function POSBilling() {
     sundayOfThisWeek.setDate(mondayOfThisWeek.getDate() + 6);
     sundayOfThisWeek.setHours(23, 59, 59, 999);
 
-    orders.forEach((order) => {
+    analyticsEligibleOrders.forEach((order) => {
       if (!passesGst(order)) return;
       if (analyticsSearchPhone) {
         const q = analyticsSearchPhone.toLowerCase();
@@ -2237,7 +2325,7 @@ export default function POSBilling() {
       "Dec",
     ];
     const monthRevenue = Array(12).fill(0);
-    orders.forEach((order) => {
+    analyticsEligibleOrders.forEach((order) => {
       if (!passesGst(order)) return;
       if (analyticsSearchPhone) {
         const q = analyticsSearchPhone.toLowerCase();
@@ -2257,7 +2345,7 @@ export default function POSBilling() {
     const avgMonthRevenue = totalYearRevenue / 12;
 
     // New Detailed KPI Computations based on analyticsFilteredOrders
-    const todayOrders = orders.filter((o) => {
+    const todayOrders = analyticsEligibleOrders.filter((o) => {
       if (!passesGst(o)) return false;
       if (analyticsSearchPhone) {
         const q = analyticsSearchPhone.toLowerCase();
@@ -4567,161 +4655,304 @@ export default function POSBilling() {
 
         {/* ── Advance Order VIEW / RECEIVE-BALANCE dialog ────────── */}
         {selectedAdvance && advanceViewMode && (
-          <div className="fixed inset-0 z-[400] flex items-center justify-center p-3 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg p-5 max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200">
-              <div className="flex justify-between items-center pb-3 border-b border-black/10">
-                <div>
-                  <p className="text-[11px] font-mono font-bold text-[#0097A7]">{selectedAdvance.id}</p>
-                  <h3 className="text-lg font-black text-[#000000] tracking-tight">
-                    {advanceViewMode === "receive" ? "Receive Remaining Payment" : "Advance Order Details"}
-                  </h3>
-                </div>
-                <button onClick={closeAdvanceDialog} className="text-black hover:bg-black/5 w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              {/* Customer + Items summary (both modes) */}
-              <div className="mt-4 space-y-3">
-                <div className="bg-[#F9FAFB] border border-black/10 rounded-lg p-3">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-[#007A87]">Customer</p>
-                  <p className="text-sm font-black text-black">{selectedAdvance.customer_name}</p>
-                  <p className="text-[11px] font-bold text-[#007A87]">{selectedAdvance.customer_phone}</p>
-                  {selectedAdvance.customer_address && (
-                    <p className="text-[11px] text-[#007A87] mt-0.5">{selectedAdvance.customer_address}</p>
-                  )}
-                </div>
-
-                <div className="border border-black/10 rounded-lg divide-y divide-black/5">
-                  {selectedAdvance.items.map((it) => (
-                    <div key={it.id} className="flex justify-between items-center p-2.5 text-xs">
-                      <div>
-                        <p className="font-bold text-black">{it.snapshot_name}</p>
-                        <p className="text-[10px] text-[#007A87]">Qty: {it.quantity} × ₹{Number(it.snapshot_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                      </div>
-                      <p className="font-black text-black">₹{(Number(it.snapshot_price) * it.quantity).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+          <div className="fixed inset-0 z-[400] flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-6 max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200 border-t-4 border-emerald-500">
+              {advanceViewMode === "receive" ? (
+                <div className="space-y-4">
+                  {/* 1. Small green deposit ID label at top, title "Receive Remaining Payment", close X top-right */}
+                  <div className="flex justify-between items-start">
+                    <div>
+                      <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200">
+                        {selectedAdvance.id}
+                      </span>
+                      <h3 className="text-lg font-black text-gray-900 tracking-tight mt-1">
+                        Receive Remaining Payment
+                      </h3>
+                      <p className="text-xs text-gray-500">
+                        {selectedAdvance.customer_name || "Customer"} • {selectedAdvance.customer_phone || "No phone"}
+                      </p>
                     </div>
-                  ))}
-                </div>
-
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="bg-[#F4F4F5] border border-black/10 rounded-lg p-2.5">
-                    <p className="text-[9px] font-bold text-[#007A87] uppercase tracking-wider">Total</p>
-                    <p className="text-sm font-black text-black">₹{Number(selectedAdvance.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                  </div>
-                  <div className="bg-[#DCFCE7] border border-[#16A34A]/30 rounded-lg p-2.5">
-                    <p className="text-[9px] font-bold text-[#166534] uppercase tracking-wider">Paid</p>
-                    <p className="text-sm font-black text-[#166534]">₹{Number(selectedAdvance.deposit_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                  </div>
-                  <div className="bg-[#FEE2E2] border border-[#DC2626]/30 rounded-lg p-2.5">
-                    <p className="text-[9px] font-bold text-[#991B1B] uppercase tracking-wider">Balance</p>
-                    <p className="text-sm font-black text-[#991B1B]">₹{balanceRemaining(selectedAdvance).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                  </div>
-                </div>
-
-                {selectedAdvance.delivery_date && (
-                  <p className="text-[11px] font-bold text-[#007A87]"><Calendar className="w-3 h-3 inline mr-1" />Delivery: {new Date(selectedAdvance.delivery_date).toLocaleDateString()}</p>
-                )}
-                {selectedAdvance.notes && (
-                  <div className="bg-[#FEF9C3] border border-[#EAB308]/30 rounded-lg p-2.5 text-[11px] text-[#78350F]">
-                    <span className="font-bold">Notes: </span>{selectedAdvance.notes}
-                  </div>
-                )}
-
-                {/* Print / Share the advance receipt (view mode) */}
-                {advanceViewMode === "view" && (
-                  <div className="pt-3 border-t border-black/10 grid grid-cols-2 gap-2">
                     <button
-                      onClick={() => printAdvanceReceipt(selectedAdvance.id)}
-                      className="bg-white border border-gray-300 hover:bg-gray-50 text-black py-2.5 px-3 rounded-lg font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      onClick={closeAdvanceDialog}
+                      className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
                     >
-                      <Printer className="w-3.5 h-3.5 text-[#0097A7]" />
-                      Print Receipt
-                    </button>
-                    <button
-                      onClick={() =>
-                        shareAdvanceReceiptWhatsApp({
-                          id: selectedAdvance.id,
-                          customerName: selectedAdvance.customer_name || "Guest",
-                          customerPhone: selectedAdvance.customer_phone,
-                          total: Number(selectedAdvance.total_amount) || 0,
-                          deposit: Number(selectedAdvance.deposit_amount) || 0,
-                          balance: balanceRemaining(selectedAdvance),
-                        })
-                      }
-                      className="bg-[#10B981] hover:bg-[#059669] text-white py-2.5 px-3 rounded-lg font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
-                        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.012c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
-                      </svg>
-                      Share Receipt
+                      <X className="w-5 h-5" />
                     </button>
                   </div>
-                )}
 
-                {/* Receive-payment specific fields */}
-                {advanceViewMode === "receive" && selectedAdvance.status !== "COMPLETED" && selectedAdvance.status !== "CANCELLED" && (
-                  <div className="pt-3 border-t border-black/10 space-y-3">
-                    <div>
-                      <label className="block text-[10px] font-bold text-[#000000] uppercase tracking-wider mb-1.5">Manual Discount</label>
-                      <div className="flex gap-2">
-                        <select
-                          value={receiveDiscountType}
-                          onChange={(e) => setReceiveDiscountType(e.target.value as "FIXED" | "PERCENT")}
-                          className="bg-white border border-black/15 rounded-lg px-2 py-2 text-xs font-bold focus:outline-none"
-                        >
-                          <option value="FIXED">₹</option>
-                          <option value="PERCENT">%</option>
-                        </select>
-                        <input
-                          type="number"
-                          value={receiveDiscountValue}
-                          onChange={(e) => setReceiveDiscountValue(e.target.value === "" ? "" : parseFloat(e.target.value))}
-                          onWheel={(e) => e.currentTarget.blur()}
-                          className="flex-1 bg-white border border-black/15 focus:border-[#0097A7] rounded-lg px-3 py-2 text-sm font-bold focus:outline-none"
-                          placeholder="0"
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-bold text-[#000000] uppercase tracking-wider mb-1.5">Payment Method</label>
-                      <div className="grid grid-cols-2 gap-1.5">
-                        {ORDER_PAYMENT_MODES.map((mode) => (
-                          <button
-                            key={mode}
-                            onClick={() => setReceivePaymentMode(mode)}
-                            className={`py-1.5 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all cursor-pointer ${
-                              receivePaymentMode === mode ? "bg-[#0097A7] text-white border-[#0097A7]" : "bg-white text-black border-black/10 hover:border-[#0097A7]"
-                            }`}
-                          >
-                            {mode === "GPAY" ? "GPay" : mode}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="bg-[#DCFCE7] border border-[#16A34A]/40 rounded-lg p-3 text-center">
-                      <p className="text-[10px] font-bold text-[#166534] uppercase tracking-wider">Final Amount to Collect</p>
-                      <p className="text-2xl font-black text-[#166534]">₹{receiveBalanceFinalAmount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                    </div>
-
-                    <p className="text-[10px] font-bold text-[#78350F] bg-[#FEF3C7] border border-[#F59E0B]/30 rounded-lg p-2.5">
-                      Confirmation marks the order Completed, creates one official invoice, and recognizes the full ₹{Number(selectedAdvance.total_amount - receiveBalanceDiscountAmount).toLocaleString(undefined, { minimumFractionDigits: 2 })} as revenue.
+                  {/* 2. Light-green card: REMAINING AMOUNT label with large bold amount */}
+                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
+                      REMAINING AMOUNT
                     </p>
+                    <p className="text-3xl font-black text-emerald-700 mt-0.5">
+                      ₹{settlementCalc.remainingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </p>
+                    <div className="flex justify-center gap-4 mt-2 text-[11px] text-emerald-900/80 font-medium border-t border-emerald-200/60 pt-2">
+                      <span>Order Total: ₹{settlementCalc.grandTotal.toFixed(2)}</span>
+                      <span>•</span>
+                      <span>Already Paid: ₹{settlementCalc.totalPaid.toFixed(2)}</span>
+                    </div>
+                  </div>
 
-                    <button
-                      onClick={confirmReceiveBalance}
-                      disabled={isFinalizing}
-                      className={`w-full py-3 rounded-lg font-black text-[11px] uppercase tracking-[0.1em] flex items-center justify-center gap-2 bg-[#10B981] hover:bg-[#059669] text-white shadow-md transition-all ${
-                        isFinalizing ? "opacity-60 cursor-not-allowed" : "cursor-pointer"
-                      }`}
-                    >
-                      {isFinalizing ? (<><Loader2 className="w-4 h-4 animate-spin" /><span>Finalizing...</span></>) : (<><Check className="w-4 h-4" /><span>Confirm Final Payment</span></>)}
+                  {/* 3. COUPON CODE (OPTIONAL) input with green Apply button */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                      Coupon Code (Optional)
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={receiveCouponCode}
+                        onChange={(e) => {
+                          setReceiveCouponCode(e.target.value.toUpperCase());
+                          setCouponError(null);
+                        }}
+                        placeholder="e.g. WELCOME10, SUPERPOS"
+                        className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 uppercase focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const code = receiveCouponCode.trim().toUpperCase();
+                          if (!code) {
+                            setAppliedCoupon(null);
+                            setCouponError(null);
+                            return;
+                          }
+                          const found = coupons.find((c) => c.code.toUpperCase() === code && c.code !== "none");
+                          if (found) {
+                            setAppliedCoupon({ code: found.code, type: found.type as any, value: found.value });
+                            setCouponError(null);
+                          } else {
+                            setAppliedCoupon(null);
+                            setCouponError("Invalid coupon code: " + code);
+                          }
+                        }}
+                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                      >
+                        Apply
+                      </button>
+                    </div>
+                    {appliedCoupon && (
+                      <div className="mt-1.5 flex items-center justify-between text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
+                        <span className="font-bold">
+                          ✓ Coupon applied: {appliedCoupon.code} (-₹{settlementCalc.couponDiscountAmount.toFixed(2)})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setAppliedCoupon(null);
+                            setReceiveCouponCode("");
+                          }}
+                          className="text-xs text-rose-600 hover:underline font-bold cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                    {couponError && (
+                      <p className="mt-1 text-[11px] font-semibold text-rose-600">{couponError}</p>
+                    )}
+                  </div>
+
+                  {/* 4. MANUAL DISCOUNT with currency/percent type dropdown (₹ / %) plus numeric input */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                      Manual Discount
+                    </label>
+                    <div className="flex gap-2">
+                      <select
+                        value={receiveDiscountType}
+                        onChange={(e) => setReceiveDiscountType(e.target.value as "FIXED" | "PERCENT")}
+                        className="bg-white border border-gray-300 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none focus:border-emerald-500"
+                      >
+                        <option value="FIXED">₹</option>
+                        <option value="PERCENT">%</option>
+                      </select>
+                      <input
+                        type="number"
+                        min="0"
+                        value={receiveDiscountValue}
+                        onChange={(e) => setReceiveDiscountValue(e.target.value === "" ? "" : parseFloat(e.target.value))}
+                        onWheel={(e) => e.currentTarget.blur()}
+                        placeholder="Discount amount"
+                        className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none"
+                      />
+                    </div>
+                    {settlementCalc.manualDiscountAmount > 0 && (
+                      <p className="mt-1 text-[11px] text-gray-500 font-medium">
+                        Manual discount applied: -₹{settlementCalc.manualDiscountAmount.toFixed(2)}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* 5. PAYMENT METHOD dropdown / buttons */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                      Payment Method
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {(["CASH", "GPAY", "SPLIT"] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          type="button"
+                          onClick={() => setReceivePaymentMode(mode)}
+                          className={`py-2 px-1 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
+                            receivePaymentMode === mode
+                              ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                              : "bg-white text-gray-700 border-gray-200 hover:border-emerald-500"
+                          }`}
+                        >
+                          {mode === "GPAY" ? "UPI / GPay" : mode === "CASH" ? "Cash" : "Card / Split"}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 6. PAYMENT NOTES optional textarea */}
+                  <div>
+                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
+                      Payment Notes (Optional)
+                    </label>
+                    <textarea
+                      value={receivePaymentNotes}
+                      onChange={(e) => setReceivePaymentNotes(e.target.value)}
+                      placeholder="e.g. Settle remaining via UPI..."
+                      className="w-full bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none min-h-[60px] resize-none"
+                    />
+                  </div>
+
+                  {/* 7. Yellow info box */}
+                  <div className="bg-amber-50 border border-amber-300/80 rounded-xl p-3 text-[11px] text-amber-900 font-medium">
+                    Confirmation marks the order Completed, creates one official invoice, and recognizes the full ₹{settlementCalc.grandTotal.toFixed(2)} as revenue.
+                  </div>
+
+                  {/* Validation error if discount causes negative remaining */}
+                  {!settlementCalc.isValid && (
+                    <div className="bg-rose-50 border border-rose-300 rounded-xl p-2.5 text-xs text-rose-700 font-bold">
+                      {settlementCalc.errorMessage || "Discount cannot reduce the total below the amount already paid."}
+                    </div>
+                  )}
+
+                  {/* 8. Full-width green Confirm Final Payment button */}
+                  <button
+                    onClick={confirmReceiveBalance}
+                    disabled={isFinalizing || !settlementCalc.isValid}
+                    className={`w-full py-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md transition-all ${
+                      isFinalizing || !settlementCalc.isValid ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                    }`}
+                  >
+                    {isFinalizing ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        <span>Finalizing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Check className="w-4 h-4" />
+                        <span>Confirm Final Payment</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              ) : (
+                /* Regular advance order view mode */
+                <div>
+                  <div className="flex justify-between items-center pb-3 border-b border-black/10">
+                    <div>
+                      <p className="text-[11px] font-mono font-bold text-[#0097A7]">{selectedAdvance.id}</p>
+                      <h3 className="text-lg font-black text-[#000000] tracking-tight">
+                        Advance Order Details
+                      </h3>
+                    </div>
+                    <button onClick={closeAdvanceDialog} className="text-black hover:bg-black/5 w-7 h-7 rounded-lg flex items-center justify-center cursor-pointer">
+                      <X className="w-4 h-4" />
                     </button>
                   </div>
-                )}
-              </div>
+
+                  <div className="mt-4 space-y-3">
+                    <div className="bg-[#F9FAFB] border border-black/10 rounded-lg p-3">
+                      <p className="text-[10px] font-bold uppercase tracking-wider text-[#007A87]">Customer</p>
+                      <p className="text-sm font-black text-black">{selectedAdvance.customer_name || "Guest"}</p>
+                      <p className="text-[11px] font-bold text-[#007A87]">{selectedAdvance.customer_phone || "—"}</p>
+                      {selectedAdvance.customer_address && (
+                        <p className="text-[11px] text-[#007A87] mt-0.5">{selectedAdvance.customer_address}</p>
+                      )}
+                    </div>
+
+                    <div className="border border-black/10 rounded-lg divide-y divide-black/5">
+                      {selectedAdvance.items.map((it) => (
+                        <div key={it.id} className="flex justify-between items-center p-2.5 text-xs">
+                          <div>
+                            <p className="font-bold text-black">{it.snapshot_name}</p>
+                            <p className="text-[10px] text-[#007A87]">Qty: {it.quantity} × ₹{Number(it.snapshot_price).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                          </div>
+                          <p className="font-black text-black">₹{(Number(it.snapshot_price) * it.quantity).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    {(() => {
+                      const t = getAdvanceTotals(selectedAdvance);
+                      return (
+                        <div className="grid grid-cols-3 gap-2 text-center">
+                          <div className="bg-[#F4F4F5] border border-black/10 rounded-lg p-2.5">
+                            <p className="text-[9px] font-bold text-[#007A87] uppercase tracking-wider">Total</p>
+                            <p className="text-sm font-black text-black">₹{t.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                          </div>
+                          <div className="bg-[#DCFCE7] border border-[#16A34A]/30 rounded-lg p-2.5">
+                            <p className="text-[9px] font-bold text-[#166534] uppercase tracking-wider">Paid</p>
+                            <p className="text-sm font-black text-[#166534]">₹{t.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                          </div>
+                          <div className={`border rounded-lg p-2.5 ${t.remainingBalance > 0 ? "bg-[#FEE2E2] border-[#DC2626]/30 text-[#991B1B]" : "bg-[#DCFCE7] border-[#16A34A]/30 text-[#166534]"}`}>
+                            <p className="text-[9px] font-bold uppercase tracking-wider">Balance</p>
+                            <p className="text-sm font-black">₹{t.remainingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
+                    {selectedAdvance.delivery_date && (
+                      <p className="text-[11px] font-bold text-[#007A87]"><Calendar className="w-3 h-3 inline mr-1" />Delivery: {new Date(selectedAdvance.delivery_date).toLocaleDateString()}</p>
+                    )}
+                    {selectedAdvance.notes && (
+                      <div className="bg-[#FEF9C3] border border-[#EAB308]/30 rounded-lg p-2.5 text-[11px] text-[#78350F]">
+                        <span className="font-bold">Notes: </span>{selectedAdvance.notes}
+                      </div>
+                    )}
+
+                    <div className="pt-3 border-t border-black/10 grid grid-cols-2 gap-2">
+                      <button
+                        onClick={() => printAdvanceReceipt(selectedAdvance.id)}
+                        className="bg-white border border-gray-300 hover:bg-gray-50 text-black py-2.5 px-3 rounded-lg font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-[#0097A7]" />
+                        Print Receipt
+                      </button>
+                      <button
+                        onClick={() => {
+                          const t = getAdvanceTotals(selectedAdvance);
+                          shareAdvanceReceiptWhatsApp({
+                            id: selectedAdvance.id,
+                            customerName: selectedAdvance.customer_name || "Guest",
+                            customerPhone: selectedAdvance.customer_phone,
+                            total: t.grandTotal,
+                            deposit: t.totalPaid,
+                            balance: t.remainingBalance,
+                          });
+                        }}
+                        className="bg-[#10B981] hover:bg-[#059669] text-white py-2.5 px-3 rounded-lg font-bold text-[10px] uppercase tracking-wider flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                      >
+                        <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
+                          <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.012c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
+                        </svg>
+                        Share Receipt
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -4738,7 +4969,7 @@ export default function POSBilling() {
 
               {advanceOrders.length > 0 && (
                 <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
-                  <div className="flex flex-wrap items-center bg-[#FFFFFF] border border-black/10 rounded-xl p-1 gap-1 max-w-full">
+                  <div className="flex flex-wrap items-center bg-[#FFFFFF] border border-black/10 rounded-xl p-1 gap-1 max-w-full overflow-x-auto">
                     <span className="text-[9px] font-bold text-[#000000] uppercase tracking-wider px-2">
                       Period:
                     </span>
@@ -4763,10 +4994,10 @@ export default function POSBilling() {
                               setAdvStartDate("");
                               setAdvEndDate("");
                             }}
-                            className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer ${
+                            className={`px-3 py-1 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all cursor-pointer whitespace-nowrap ${
                               isActive
                                 ? "bg-[#0097A7] text-[#FFFFFF] shadow-sm"
-                                : "text-[#000000] hover:bg-[#000000]/50"
+                                : "text-[#000000] hover:bg-[#000000]/10"
                             }`}
                           >
                             {displayLabel}
@@ -4776,8 +5007,8 @@ export default function POSBilling() {
                     )}
                   </div>
 
-                  <div className="flex flex-wrap items-center border rounded-xl px-3 py-1.5 gap-2 shadow-sm bg-white border-black/10 min-w-0">
-                    <div className="flex items-center gap-1">
+                  <div className="flex flex-col sm:flex-row items-stretch sm:items-center border rounded-xl px-3 py-1.5 gap-2 shadow-sm bg-white border-black/10 w-full sm:w-auto">
+                    <div className="flex items-center justify-between sm:justify-start gap-1">
                       <span className="text-[9px] font-bold uppercase tracking-wider text-[#000000]">
                         From:
                       </span>
@@ -4788,10 +5019,10 @@ export default function POSBilling() {
                           setAdvPeriod("custom");
                           setAdvStartDate(e.target.value);
                         }}
-                        className="text-xs font-bold bg-transparent border-none outline-none focus:ring-0 cursor-pointer text-[#000000] w-[115px]"
+                        className="text-xs font-bold bg-transparent border-none outline-none focus:ring-0 cursor-pointer text-[#000000] w-[125px]"
                       />
                     </div>
-                    <div className="flex items-center gap-1">
+                    <div className="flex items-center justify-between sm:justify-start gap-1">
                       <span className="text-[9px] font-bold uppercase tracking-wider text-[#000000]">
                         To:
                       </span>
@@ -4802,7 +5033,7 @@ export default function POSBilling() {
                           setAdvPeriod("custom");
                           setAdvEndDate(e.target.value);
                         }}
-                        className="text-xs font-bold bg-transparent border-none outline-none focus:ring-0 cursor-pointer text-[#000000] w-[115px]"
+                        className="text-xs font-bold bg-transparent border-none outline-none focus:ring-0 cursor-pointer text-[#000000] w-[125px]"
                       />
                     </div>
                   </div>
@@ -4810,13 +5041,17 @@ export default function POSBilling() {
               )}
             </div>
 
-            {/* Summary cards */}
+            {/* Summary cards (FIX 5: strictly respects Period filter and calculates real data) */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
               {(() => {
-                const pending = advanceOrders.filter((a) => a.status === "PENDING" || a.status === "READY");
-                const outstanding = pending.reduce((acc, a) => acc + balanceRemaining(a), 0);
-                const ready = advanceOrders.filter((a) => a.status === "READY").length;
-                const completed = advanceOrders.filter((a) => a.status === "COMPLETED").length;
+                const filteredByPeriod = advanceOrders.filter((a) =>
+                  isDateInPeriod(a.created_at, advPeriod, advStartDate, advEndDate)
+                );
+                const outstanding = filteredByPeriod
+                  .filter((a) => a.status !== "CANCELLED")
+                  .reduce((acc, a) => acc + balanceRemaining(a), 0);
+                const ready = filteredByPeriod.filter((a) => a.status === "READY").length;
+                const completed = filteredByPeriod.filter((a) => a.status === "COMPLETED").length;
                 return (
                   <>
                     <div className="bg-white border border-black/10 rounded-xl p-4 shadow-xs flex justify-between items-center">
@@ -4878,153 +5113,338 @@ export default function POSBilling() {
               </div>
             </div>
 
-            {/* Rows */}
-            <div className="bg-white border border-black/10 rounded-xl overflow-hidden">
-              <table className="w-full table-fixed border-collapse">
-              <thead>
-                <tr className="border-b border-black/10 text-[10px] font-black uppercase tracking-wider text-[#007A87] bg-[#F9FAFB]">
-                  <th className="w-[13%] text-left px-4 py-3">Deposit ID</th>
-                  <th className="w-[14%] text-left px-4 py-3">Customer</th>
-                  <th className="w-[16%] text-left px-4 py-3">Product</th>
-                  <th className="w-[18%] text-left px-4 py-3">Total / Paid / Balance</th>
-                  <th className="w-[10%] text-center px-4 py-3">Delivery</th>
-                  <th className="w-[12%] text-center px-4 py-3">Status</th>
-                  <th className="w-[17%] text-right pr-4 py-3">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-              {(() => {
-                const q = advSearchQuery.trim().toLowerCase();
-                const filtered = advanceOrders.filter((a) => {
-                  if (!isDateInPeriod(a.created_at, advPeriod, advStartDate, advEndDate)) return false;
-                  if (advStatusFilter !== "ALL" && a.status !== advStatusFilter) return false;
-                  if (!q) return true;
-                  return (
-                    a.id.toLowerCase().includes(q) ||
-                    a.customer_name.toLowerCase().includes(q) ||
-                    a.customer_phone.includes(q) ||
-                    a.status.toLowerCase().includes(q) ||
-                    a.items.some((i) => i.snapshot_name.toLowerCase().includes(q))
-                  );
-                });
-                if (filtered.length === 0) {
-                  return (
-                    <tr><td colSpan={7} className="p-8 text-center text-xs font-bold text-[#007A87]">No advance orders match the current filters.</td></tr>
-                  );
-                }
-                return filtered.map((a) => {
-                  const bal = balanceRemaining(a);
-                  const statusStyles: Record<AdvanceOrderStatus, string> = {
-                    PENDING: "bg-[#FEF3C7] text-[#78350F] border-[#F59E0B]/30",
-                    READY: "bg-[#DBEAFE] text-[#1E3A8A] border-[#2563EB]/30",
-                    COMPLETED: "bg-[#DCFCE7] text-[#166534] border-[#16A34A]/30",
-                    CANCELLED: "bg-[#FEE2E2] text-[#991B1B] border-[#DC2626]/30",
-                  };
-                  return (
-                    <tr key={a.id} className="border-b border-black/5 hover:bg-[#FAFAFA] text-xs">
-                      <td className="w-[13%] text-left px-4 py-3 align-middle">
-                        <p className="text-xs font-bold text-slate-950 font-mono">{a.id}</p>
-                        <p className="text-[11px] text-slate-400">{new Date(a.created_at).toLocaleDateString()}</p>
-                      </td>
-                      <td className="w-[14%] text-left px-4 py-3 align-middle">
-                        <p className="font-black text-black">{a.customer_name}</p>
-                        <p className="text-[10px] text-[#007A87]">{a.customer_phone}</p>
-                      </td>
-                      <td className="w-[16%] text-left px-4 py-3 align-middle text-[11px]">
-                        {a.items.slice(0, 2).map((i) => (
-                          <p key={i.id} className="font-bold text-black truncate">
-                            {i.quantity}× {i.snapshot_name}
-                          </p>
-                        ))}
-                        {a.items.length > 2 && (
-                          <p className="text-[10px] text-[#007A87]">+{a.items.length - 2} more</p>
-                        )}
-                      </td>
-                      <td className="w-[18%] text-left px-4 py-3 align-middle">
-                        <div className="space-y-0.5">
-                          <p className="text-xs font-bold text-slate-900">Total: ₹{Number(a.total_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                          <p className="text-xs font-semibold text-emerald-600">Paid: ₹{Number(a.deposit_amount).toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                          <p className="text-xs font-semibold text-rose-600">Balance: ₹{bal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                        </div>
-                      </td>
-                      <td className="w-[10%] text-center px-4 py-3 align-middle font-medium text-slate-700 text-xs">
-                        {a.delivery_date ? new Date(a.delivery_date).toLocaleDateString("en-IN") : "—"}
-                      </td>
-                      <td className="w-[12%] text-center px-4 py-3 align-middle">
-                        <div className="relative inline-block w-full max-w-[150px] mx-auto">
-                          <select
-                            value={a.status || "PENDING"}
-                            onChange={(e) => handleStatusChange(a.id, e.target.value)}
-                            className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
-                              a.status === "COMPLETED"
-                                ? "bg-emerald-50 text-emerald-800 border-emerald-300 ring-1 ring-pink-300"
-                                : a.status === "READY"
-                                ? "bg-blue-50 text-blue-800 border-blue-300 ring-1 ring-pink-300"
-                                : a.status === "CANCELLED"
-                                ? "bg-rose-50 text-rose-800 border-rose-300"
-                                : "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-pink-300"
-                            }`}
-                          >
-                            <option value="PENDING" className="bg-white text-gray-900 font-semibold">PENDING</option>
-                            <option value="READY" className="bg-white text-gray-900 font-semibold">READY</option>
-                            <option value="COMPLETED" className="bg-white text-gray-900 font-semibold">COMPLETED</option>
-                            <option value="CANCELLED" className="bg-white text-gray-900 font-semibold">CANCELLED</option>
-                          </select>
-                          
-                          {/* Chevron Down Icon */}
-                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
-                            </svg>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="w-[17%] text-right pr-4 py-3 align-middle"><div className="flex items-center justify-end gap-1 flex-nowrap">
-                        <button onClick={() => shareAdvanceReceiptWhatsApp({
-                          id: a.id,
-                          customerName: a.customer_name,
-                          customerPhone: a.customer_phone,
-                          total: Number(a.total_amount),
-                          deposit: Number(a.deposit_amount),
-                          balance: bal
-                        })} title="Send on WhatsApp" className="flex items-center justify-center w-8 h-8 bg-[#10B981]/10 hover:bg-[#10B981]/20 text-[#10B981] rounded-md transition-colors cursor-pointer shrink-0">
-                          <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.012c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
-                          </svg>
-                        </button>
-                        <button onClick={() => {
-                          if (a.status === "COMPLETED" && a.finalized_order_id) {
-                            setActiveInvoiceId(a.finalized_order_id);
-                          } else {
-                            printAdvanceReceipt(a.id);
-                          }
-                        }} title={a.status === "COMPLETED" ? "Open Final Invoice" : "Print Advance Receipt"} className="flex items-center justify-center w-8 h-8 bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-md transition-colors cursor-pointer shrink-0">
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                          </svg>
-                        </button>
-                        <button onClick={() => openAdvanceView(a)} title="View details" className="flex items-center justify-center w-8 h-8 bg-black/5 hover:bg-black/10 text-[#000000] rounded-md transition-colors cursor-pointer shrink-0">
-                          <Eye className="w-4 h-4" />
-                        </button>
-                        {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
-                          <button onClick={() => openReceiveBalance(a)} title="Receive balance" className="flex items-center justify-center w-8 h-8 bg-[#10B981]/10 hover:bg-[#10B981]/20 text-[#10B981] rounded-md transition-colors cursor-pointer shrink-0">
-                            <IndianRupee className="w-4 h-4" />
-                          </button>
-                        )}
-                        
-                        {role === "admin" && (
-                          <button onClick={() => doDeleteAdvance(a)} title="Delete" className="flex items-center justify-center w-8 h-8 bg-[#DC2626]/10 hover:bg-[#DC2626]/20 text-[#DC2626] rounded-md transition-colors cursor-pointer shrink-0">
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                        )}
-                      </div></td>
-                  </tr>
+            {/* Orders list: Desktop Table + Mobile Stacked Cards (FIX 3) */}
+            {(() => {
+              const q = advSearchQuery.trim().toLowerCase();
+              const filtered = advanceOrders.filter((a) => {
+                if (!isDateInPeriod(a.created_at, advPeriod, advStartDate, advEndDate)) return false;
+                if (advStatusFilter !== "ALL" && a.status !== advStatusFilter) return false;
+                if (!q) return true;
+                return (
+                  a.id.toLowerCase().includes(q) ||
+                  a.customer_name.toLowerCase().includes(q) ||
+                  a.customer_phone.includes(q) ||
+                  a.status.toLowerCase().includes(q) ||
+                  a.items.some((i) => i.snapshot_name.toLowerCase().includes(q))
                 );
               });
+
+              return (
+                <>
+                  {/* Desktop Table: visible md and up */}
+                  <div className="hidden md:block bg-white border border-black/10 rounded-xl overflow-hidden">
+                    <table className="w-full table-fixed border-collapse">
+                      <thead>
+                        <tr className="border-b border-black/10 text-[10px] font-black uppercase tracking-wider text-[#007A87] bg-[#F9FAFB]">
+                          <th className="w-[13%] text-left px-4 py-3">Deposit ID</th>
+                          <th className="w-[14%] text-left px-4 py-3">Customer</th>
+                          <th className="w-[16%] text-left px-4 py-3">Product</th>
+                          <th className="w-[18%] text-left px-4 py-3">Total / Paid / Balance</th>
+                          <th className="w-[10%] text-center px-4 py-3">Delivery</th>
+                          <th className="w-[12%] text-center px-4 py-3">Status</th>
+                          <th className="w-[17%] text-right pr-4 py-3">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {filtered.length === 0 ? (
+                          <tr><td colSpan={7} className="p-8 text-center text-xs font-bold text-[#007A87]">No advance orders match the current filters.</td></tr>
+                        ) : (
+                          filtered.map((a) => {
+                            const totals = getAdvanceTotals(a);
+                            return (
+                              <tr key={a.id} className="border-b border-black/5 hover:bg-[#FAFAFA] text-xs">
+                                <td className="w-[13%] text-left px-4 py-3 align-middle">
+                                  <p className="text-xs font-bold text-slate-950 font-mono">{a.id}</p>
+                                  <p className="text-[11px] text-slate-400">{new Date(a.created_at).toLocaleDateString()}</p>
+                                </td>
+                                <td className="w-[14%] text-left px-4 py-3 align-middle">
+                                  <p className="font-black text-black">{a.customer_name || "Guest"}</p>
+                                  <p className="text-[10px] text-[#007A87]">{a.customer_phone || "—"}</p>
+                                </td>
+                                <td className="w-[16%] text-left px-4 py-3 align-middle text-[11px]">
+                                  {a.items.slice(0, 2).map((i) => (
+                                    <p key={i.id} className="font-bold text-black truncate">
+                                      {i.quantity}× {i.snapshot_name}
+                                    </p>
+                                  ))}
+                                  {a.items.length > 2 && (
+                                    <p className="text-[10px] text-[#007A87]">+{a.items.length - 2} more</p>
+                                  )}
+                                </td>
+                                <td className="w-[18%] text-left px-4 py-3 align-middle">
+                                  <div className="space-y-0.5">
+                                    <p className="text-xs font-bold text-slate-900">Total: ₹{totals.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                                    <p className="text-xs font-semibold text-emerald-600">Paid: ₹{totals.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                                    <p className={`text-xs font-semibold ${totals.remainingBalance > 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                                      Balance: ₹{totals.remainingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                    </p>
+                                  </div>
+                                </td>
+                                <td className="w-[10%] text-center px-4 py-3 align-middle font-medium text-slate-700 text-xs">
+                                  {a.delivery_date ? new Date(a.delivery_date).toLocaleDateString("en-IN") : "—"}
+                                </td>
+                                <td className="w-[12%] text-center px-4 py-3 align-middle">
+                                  <div className="relative inline-block w-full max-w-[150px] mx-auto">
+                                    <select
+                                      key={`adv-status-${a.id}-${a.status || "PENDING"}`}
+                                      value={a.status || "PENDING"}
+                                      onChange={(e) => handleStatusChange(a.id, e.target.value)}
+                                      className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                                        a.status === "COMPLETED"
+                                          ? "bg-emerald-50 text-emerald-800 border-emerald-300"
+                                          : a.status === "READY"
+                                          ? "bg-blue-50 text-blue-800 border-blue-300"
+                                          : a.status === "CANCELLED"
+                                          ? "bg-rose-50 text-rose-800 border-rose-300"
+                                          : "bg-amber-50 text-amber-800 border-amber-300"
+                                      }`}
+                                    >
+                                      <option value="PENDING">PENDING</option>
+                                      <option value="READY">READY</option>
+                                      <option value="COMPLETED">COMPLETED</option>
+                                      <option value="CANCELLED">CANCELLED</option>
+                                    </select>
+                                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
+                                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                                      </svg>
+                                    </div>
+                                  </div>
+                                </td>
+                                <td className="w-[17%] text-right pr-4 py-3 align-middle">
+                                  <div className="flex items-center justify-end gap-1 flex-nowrap">
+                                    <button onClick={() => shareAdvanceReceiptWhatsApp({
+                                      id: a.id,
+                                      customerName: a.customer_name,
+                                      customerPhone: a.customer_phone,
+                                      total: totals.grandTotal,
+                                      deposit: totals.totalPaid,
+                                      balance: totals.remainingBalance
+                                    })} title="Send on WhatsApp" className="flex items-center justify-center w-8 h-8 bg-[#10B981]/10 hover:bg-[#10B981]/20 text-[#10B981] rounded-md transition-colors cursor-pointer shrink-0">
+                                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                        <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.012c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
+                                      </svg>
+                                    </button>
+                                    <button onClick={() => {
+                                      if (a.status === "COMPLETED" && a.finalized_order_id) {
+                                        setActiveInvoiceId(a.finalized_order_id);
+                                      } else {
+                                        printAdvanceReceipt(a.id);
+                                      }
+                                    }} title={a.status === "COMPLETED" ? "Open Final Invoice" : "Print Advance Receipt"} className="flex items-center justify-center w-8 h-8 bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-md transition-colors cursor-pointer shrink-0">
+                                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                      </svg>
+                                    </button>
+                                    <button onClick={() => openAdvanceView(a)} title="View details" className="flex items-center justify-center w-8 h-8 bg-black/5 hover:bg-black/10 text-[#000000] rounded-md transition-colors cursor-pointer shrink-0">
+                                      <Eye className="w-4 h-4" />
+                                    </button>
+                                    {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
+                                      <button onClick={() => openReceiveBalance(a)} title="Receive balance" className="flex items-center justify-center w-8 h-8 bg-[#10B981]/10 hover:bg-[#10B981]/20 text-[#10B981] rounded-md transition-colors cursor-pointer shrink-0">
+                                        <IndianRupee className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                    {role === "admin" && (
+                                      <button onClick={() => doDeleteAdvance(a)} title="Delete" className="flex items-center justify-center w-8 h-8 bg-[#DC2626]/10 hover:bg-[#DC2626]/20 text-[#DC2626] rounded-md transition-colors cursor-pointer shrink-0">
+                                        <Trash2 className="w-4 h-4" />
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Mobile Stacked Cards: visible on screens below md */}
+                  <div className="md:hidden space-y-3">
+                    {filtered.length === 0 ? (
+                      <div className="bg-white border border-black/10 rounded-xl p-8 text-center text-xs font-bold text-[#007A87]">
+                        No advance orders match the current filters.
+                      </div>
+                    ) : (
+                      filtered.map((a) => {
+                        const totals = getAdvanceTotals(a);
+                        const bal = totals.remainingBalance;
+                        const paid = totals.totalPaid;
+                        const grandTotal = totals.grandTotal;
+
+                        return (
+                          <div key={a.id} className="bg-white border border-black/10 rounded-xl p-4 shadow-xs space-y-3">
+                            {/* Row 1: Deposit ID + date, status badge on the right */}
+                            <div className="flex items-center justify-between gap-2">
+                              <div>
+                                <p className="text-xs font-black text-slate-950 font-mono break-all">{a.id}</p>
+                                <p className="text-[10px] text-slate-500 font-medium">
+                                  {new Date(a.created_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                                </p>
+                              </div>
+                              <span
+                                className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border ${
+                                  a.status === "COMPLETED"
+                                    ? "bg-emerald-50 text-emerald-800 border-emerald-300"
+                                    : a.status === "READY"
+                                    ? "bg-blue-50 text-blue-800 border-blue-300"
+                                    : a.status === "CANCELLED"
+                                    ? "bg-rose-50 text-rose-800 border-rose-300"
+                                    : "bg-amber-50 text-amber-800 border-amber-300"
+                                }`}
+                              >
+                                {a.status}
+                              </span>
+                            </div>
+
+                            {/* Row 2: Customer name + phone, Product summary (truncate with ellipsis, max 2 lines) */}
+                            <div className="bg-gray-50 border border-black/5 rounded-lg p-2.5">
+                              <div>
+                                <p className="text-xs font-black text-black">{a.customer_name || "Guest"}</p>
+                                <p className="text-[11px] font-bold text-[#007A87]">{a.customer_phone || "No phone"}</p>
+                              </div>
+                              <div className="mt-1 text-[11px] text-gray-700 line-clamp-2">
+                                <span className="font-semibold text-gray-500">Items: </span>
+                                {a.items.map((i) => `${i.quantity}× ${i.snapshot_name}`).join(", ")}
+                              </div>
+                            </div>
+
+                            {/* Row 3: three equal mini-stats: Total | Paid | Balance (balance in red if > 0, green if 0) */}
+                            <div className="grid grid-cols-3 gap-2 text-center">
+                              <div className="bg-gray-50 border border-black/10 rounded-lg p-2">
+                                <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wider">Total</p>
+                                <p className="text-xs font-black text-slate-900">
+                                  ₹{grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+                                <p className="text-[9px] font-bold text-emerald-700 uppercase tracking-wider">Paid</p>
+                                <p className="text-xs font-black text-emerald-700">
+                                  ₹{paid.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                              <div className={`rounded-lg p-2 border ${bal > 0 ? "bg-rose-50 border-rose-200" : "bg-emerald-50 border-emerald-200"}`}>
+                                <p className={`text-[9px] font-bold uppercase tracking-wider ${bal > 0 ? "text-rose-700" : "text-emerald-700"}`}>Balance</p>
+                                <p className={`text-xs font-black ${bal > 0 ? "text-rose-700" : "text-emerald-700"}`}>
+                                  ₹{bal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* Row 4: Delivery date (if any) */}
+                            {a.delivery_date && (
+                              <div className="text-[11px] font-bold text-[#007A87] flex items-center gap-1.5">
+                                <Calendar className="w-3.5 h-3.5 text-[#0097A7]" />
+                                <span>Expected Delivery: {new Date(a.delivery_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                              </div>
+                            )}
+
+                            {/* Row 5: full-width Status dropdown with readable label */}
+                            <div>
+                              <label className="block text-[9px] font-bold uppercase tracking-wider text-gray-600 mb-1">
+                                Order Status:
+                              </label>
+                              <div className="relative">
+                                <select
+                                  key={`adv-m-status-${a.id}-${a.status || "PENDING"}`}
+                                  value={a.status || "PENDING"}
+                                  onChange={(e) => handleStatusChange(a.id, e.target.value)}
+                                  className={`w-full appearance-none px-3 py-2 pr-8 rounded-xl text-xs font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                                    a.status === "COMPLETED"
+                                      ? "bg-emerald-50 text-emerald-800 border-emerald-300"
+                                      : a.status === "READY"
+                                      ? "bg-blue-50 text-blue-800 border-blue-300"
+                                      : a.status === "CANCELLED"
+                                      ? "bg-rose-50 text-rose-800 border-rose-300"
+                                      : "bg-amber-50 text-amber-800 border-amber-300"
+                                  }`}
+                                >
+                                  <option value="PENDING">PENDING</option>
+                                  <option value="READY">READY</option>
+                                  <option value="COMPLETED">COMPLETED</option>
+                                  <option value="CANCELLED">CANCELLED</option>
+                                </select>
+                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-inherit opacity-70">
+                                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                                  </svg>
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Row 6: action buttons with >= 40x40px touch targets */}
+                            <div className="pt-2 border-t border-black/10 flex items-center justify-between gap-2">
+                              <button
+                                onClick={() =>
+                                  shareAdvanceReceiptWhatsApp({
+                                    id: a.id,
+                                    customerName: a.customer_name,
+                                    customerPhone: a.customer_phone,
+                                    total: grandTotal,
+                                    deposit: paid,
+                                    balance: bal,
+                                  })
+                                }
+                                title="Send on WhatsApp"
+                                className="flex-1 min-h-[40px] flex items-center justify-center bg-[#10B981]/10 hover:bg-[#10B981]/20 text-[#10B981] rounded-xl transition-colors cursor-pointer"
+                              >
+                                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                                  <path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51a12.8 12.8 0 0 0-.57-.012c-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347m-5.421 7.403h-.004a9.87 9.87 0 0 1-5.031-1.378l-.361-.214-3.741.982.998-3.648-.235-.374a9.86 9.86 0 0 1-1.51-5.26c.001-5.45 4.436-9.884 9.888-9.884 2.64 0 5.122 1.03 6.988 2.898a9.825 9.825 0 0 1 2.893 6.994c-.003 5.45-4.437 9.884-9.885 9.884m8.413-18.297A11.815 11.815 0 0 0 12.05 0C5.495 0 .16 5.335.157 11.892c0 2.096.547 4.142 1.588 5.945L.057 24l6.305-1.654a11.882 11.882 0 0 0 5.683 1.448h.005c6.554 0 11.89-5.335 11.893-11.893a11.821 11.821 0 0 0-3.48-8.413Z" />
+                                </svg>
+                              </button>
+
+                              <button
+                                onClick={() => openAdvanceView(a)}
+                                title="View Document"
+                                className="flex-1 min-h-[40px] flex items-center justify-center bg-gray-100 hover:bg-gray-200 text-gray-800 rounded-xl transition-colors cursor-pointer"
+                              >
+                                <Eye className="w-4 h-4" />
+                              </button>
+
+                              <button
+                                onClick={() => {
+                                  if (a.status === "COMPLETED" && a.finalized_order_id) {
+                                    setActiveInvoiceId(a.finalized_order_id);
+                                  } else {
+                                    printAdvanceReceipt(a.id);
+                                  }
+                                }}
+                                title={a.status === "COMPLETED" ? "Open Final Invoice" : "Print Advance Receipt"}
+                                className="flex-1 min-h-[40px] flex items-center justify-center bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-xl transition-colors cursor-pointer"
+                              >
+                                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                </svg>
+                              </button>
+
+                              {a.status !== "COMPLETED" && a.status !== "CANCELLED" && (
+                                <button
+                                  onClick={() => openReceiveBalance(a)}
+                                  title="Receive Balance"
+                                  className="flex-1 min-h-[40px] flex items-center justify-center bg-[#10B981]/15 hover:bg-[#10B981]/25 text-[#10B981] rounded-xl transition-colors cursor-pointer"
+                                >
+                                  <IndianRupee className="w-4 h-4" />
+                                </button>
+                              )}
+
+                              {role === "admin" && (
+                                <button
+                                  onClick={() => doDeleteAdvance(a)}
+                                  title="Delete"
+                                  className="flex-1 min-h-[40px] flex items-center justify-center bg-[#DC2626]/10 hover:bg-[#DC2626]/20 text-[#DC2626] rounded-xl transition-colors cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </>
+              );
             })()}
-              </tbody>
-            </table>
-            </div>
           </div>
         )}
 
@@ -7606,9 +8026,9 @@ export default function POSBilling() {
 
         {/* Print Settings Modal */}
         {printModalData && (
-          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-center justify-center p-4 animate-in fade-in duration-200">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden transform scale-100 animate-in zoom-in-95 duration-200">
-              <div className="bg-neutral-900 px-5 py-4 flex items-center justify-between border-b border-neutral-800">
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[500] flex items-center justify-center p-3 sm:p-4 animate-in fade-in duration-200">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md max-h-[90vh] overflow-y-auto transform scale-100 animate-in zoom-in-95 duration-200 flex flex-col">
+              <div className="bg-neutral-900 px-5 py-4 flex items-center justify-between border-b border-neutral-800 sticky top-0 z-10">
                 <h3 className="font-bold text-white text-sm uppercase tracking-wider flex items-center gap-2">
                   <Printer className="w-4 h-4 text-neutral-300" />
                   Print Settings
@@ -7620,7 +8040,7 @@ export default function POSBilling() {
                   <X className="w-4 h-4" />
                 </button>
               </div>
-              <div className="p-6 space-y-6">
+              <div className="p-5 sm:p-6 space-y-6 flex-1">
                 <div>
                   <label className="block text-xs font-black text-black uppercase tracking-wider mb-3">Printer Type</label>
                   <div className="grid grid-cols-2 gap-3">
@@ -7656,21 +8076,21 @@ export default function POSBilling() {
                   </div>
                 </div>
               </div>
-              <div className="bg-neutral-50 px-6 py-4 flex justify-end border-t border-neutral-200 gap-3">
+              <div className="bg-neutral-50 px-5 py-4 flex justify-end border-t border-neutral-200 gap-3 sticky bottom-0">
                 <button
                   onClick={() => setPrintModalData(null)}
-                  className="px-5 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-neutral-600 hover:bg-neutral-200 transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-xl font-bold text-xs uppercase tracking-wider text-neutral-600 hover:bg-neutral-200 transition-colors cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={() => {
-                    localStorage.setItem("shalistone_print_prefs", JSON.stringify(printPrefs));
+                    localStorage.setItem("love_and_happy_print_prefs", JSON.stringify(printPrefs));
                     const baseUrl = printModalData.type === "invoice" ? `/invoice/${printModalData.id}` : `/advance/${printModalData.id}`;
                     window.open(`${baseUrl}?print=true&paper=${printPrefs.paper}&size=${printPrefs.size}`, "_blank");
                     setPrintModalData(null);
                   }}
-                  className="px-6 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider bg-[#0097A7] hover:bg-[#254659] text-white shadow-md transition-all cursor-pointer flex items-center gap-2"
+                  className="px-5 py-2.5 rounded-xl font-black text-xs uppercase tracking-wider bg-[#0097A7] hover:bg-[#254659] text-white shadow-md transition-all cursor-pointer flex items-center gap-2"
                 >
                   <Printer className="w-4 h-4" />
                   Print Now

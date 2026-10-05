@@ -211,6 +211,14 @@ export const dbStore = {
       snapshot_price: number;
       quantity: number;
     }[];
+    isGst?: boolean;
+    gstPercentage?: number;
+    gstAmount?: number;
+    taxMode?: 'exclusive' | 'inclusive';
+    discountType?: 'PERCENT' | 'FIXED';
+    discountValue?: number;
+    discountAmount?: number;
+    deliveryFee?: number;
   }): Promise<{ advanceOrderId: string }> {
     return await supabaseCreateAdvanceOrder(payload);
   },

@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Clock, MessageSquare, FileText, Eye, IndianRupee, Trash2, RefreshCw } from "lucide-react";
-import { fetchAdvanceOrders, removeAdvanceOrder, setAdvanceOrderStatus } from "@/app/pos/actions";
+import { ArrowLeft, Clock, MessageSquare, FileText, Eye, IndianRupee, Trash2, RefreshCw, Check, Loader2, X } from "lucide-react";
+import { fetchAdvanceOrders, removeAdvanceOrder, setAdvanceOrderStatus, finalizeAdvanceOrder } from "@/app/pos/actions";
 import { AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
+import { calculateAdvanceOrderTotals } from "@/lib/advanceOrderCalculations";
 import { supabase } from "@/lib/supabaseClient";
 
 export const dynamic = "force-dynamic";
@@ -18,6 +19,18 @@ export default function AdminAdvanceOrdersPage() {
   const [activeFilter, setActiveFilter] = useState<FilterTab>("ALL");
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+
+  // ── Receive Remaining Payment modal state ──
+  const [receiveModalOrder, setReceiveModalOrder] = useState<AdvanceOrderWithRelations | null>(null);
+  const [receiveDiscountType, setReceiveDiscountType] = useState<"FIXED" | "PERCENT">("FIXED");
+  const [receiveDiscountValue, setReceiveDiscountValue] = useState<number | "">("");
+  const [receivePaymentMode, setReceivePaymentMode] = useState<"CASH" | "GPAY" | "SPLIT">("CASH");
+  const [receivePaymentNotes, setReceivePaymentNotes] = useState<string>("");
+  const [receiveCouponCode, setReceiveCouponCode] = useState<string>("");
+  const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; type: "fixed" | "percent"; value: number } | null>(null);
+  const [couponError, setCouponError] = useState<string | null>(null);
+  const [isFinalizing, setIsFinalizing] = useState(false);
+  const isFinalizingLock = useRef(false);
 
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true);
@@ -179,25 +192,71 @@ export default function AdminAdvanceOrdersPage() {
     }
   };
 
+  // ── Helper: compute totals from saved DB values ──
+  const getAdvanceTotals = (adv: AdvanceOrderWithRelations) =>
+    calculateAdvanceOrderTotals({
+      items: (adv.items || []).map((it) => ({
+        price: Number(it.snapshot_price) || 0,
+        qty: Number(it.quantity) || 1,
+      })),
+      subtotal: Number(adv.subtotal) || Number(adv.total_amount) || 0,
+      isGst: adv.is_gst !== undefined ? Boolean(adv.is_gst) : undefined,
+      gstPercentage: adv.gst_percentage !== undefined ? Number(adv.gst_percentage) : undefined,
+      taxMode: (adv as any).tax_mode || "exclusive",
+      manualDiscount:
+        Number((adv as any).discount_amount) > 0 || Number((adv as any).discount_value) > 0
+          ? {
+              type: (((adv as any).discount_type || "FIXED").toUpperCase() as any),
+              value: Number((adv as any).discount_value) || Number((adv as any).discount_amount) || 0,
+            }
+          : null,
+      deliveryFee: Number((adv as any).delivery_fee) || 0,
+      advanceAmount: Number(adv.deposit_amount) || 0,
+      grandTotal: Number(adv.total_amount) || undefined,
+    });
+
+  const openReceiveModal = (adv: AdvanceOrderWithRelations) => {
+    setReceiveModalOrder(adv);
+    setReceiveDiscountType("FIXED");
+    setReceiveDiscountValue("");
+    setReceivePaymentMode("CASH");
+    setReceivePaymentNotes("");
+    setReceiveCouponCode("");
+    setAppliedCoupon(null);
+    setCouponError(null);
+    // Reset state so select stays on previous status
+    setAdvanceOrders((prev) => [...prev]);
+  };
+
+  const closeReceiveModal = () => {
+    setReceiveModalOrder(null);
+    setReceiveCouponCode("");
+    setAppliedCoupon(null);
+    setCouponError(null);
+    // Force re-render so status selects snap back to saved status
+    setAdvanceOrders((prev) => [...prev]);
+  };
+
   const handleStatusChange = async (orderId: string, newStatus: string, order: any) => {
-    const orderTotal = Number(order?.total_amount ?? order?.total ?? order?.grand_total ?? 0);
     const statusUpper = String(newStatus || "").trim().toUpperCase() as AdvanceOrderStatus;
 
-    // 1. Immediate local state update: decrement "OUTSTANDING BALANCE" metric in real time
-    setAdvanceOrders((prev) => {
-      const updated = prev.map((ord) => {
-        if (ord.id === orderId) {
-          const ordTotal = Number(ord.total_amount ?? (ord as any).total ?? (ord as any).grand_total ?? orderTotal);
-          return {
-            ...ord,
-            status: statusUpper,
-            deposit_amount: statusUpper === "COMPLETED" ? ordTotal : ord.deposit_amount,
-            amount_paid: statusUpper === "COMPLETED" ? ordTotal : (ord as any).amount_paid,
-            balance_due: statusUpper === "COMPLETED" ? 0 : (ord as any).balance_due,
-          };
+    // If Completed selected and there is a remaining balance, open payment popup instead
+    if (statusUpper === "COMPLETED") {
+      const adv = advanceOrders.find((a) => a.id === orderId);
+      if (adv) {
+        const totals = getAdvanceTotals(adv);
+        if (totals.remainingBalance > 0) {
+          openReceiveModal(adv);
+          return;
         }
-        return ord;
-      });
+      }
+    }
+
+    // For all other statuses (and Completed with zero balance): update ONLY status field
+    setAdvanceOrders((prev) => {
+      const updated = prev.map((ord) =>
+        ord.id === orderId ? { ...ord, status: statusUpper } : ord
+      );
       const uniqueMap = new Map<string, AdvanceOrderWithRelations>();
       for (const o of updated) {
         if (!o.id || uniqueMap.has(o.id)) continue;
@@ -207,105 +266,31 @@ export default function AdminAdvanceOrdersPage() {
     });
 
     try {
-      // 2. Synchronize advance_orders table in Supabase with exact uppercase casing
-      const advUpdates: any = {
-        status: statusUpper,
-      };
-      if (statusUpper === "COMPLETED") {
-        advUpdates.finalized_at = new Date().toISOString();
-        if (orderTotal > 0) {
-          advUpdates.deposit_amount = orderTotal;
-        }
-      } else if (statusUpper === "CANCELLED") {
-        advUpdates.cancelled_at = new Date().toISOString();
-      }
+      const advUpdates: any = { status: statusUpper };
+      if (statusUpper === "COMPLETED") advUpdates.finalized_at = new Date().toISOString();
+      else if (statusUpper === "CANCELLED") advUpdates.cancelled_at = new Date().toISOString();
 
       const { error: advErr } = await supabase
         .from("advance_orders")
         .update(advUpdates)
         .eq("id", orderId);
+      if (advErr) throw new Error(`Failed to update advance order: ${advErr.message}`);
 
-      if (advErr) {
-        console.error("Supabase advance_orders update error:", advErr);
-        throw new Error(`Failed to update advance order: ${advErr.message}`);
-      }
-
-      // 3. Synchronize orders table in Supabase so Order History & Analytics see it
       const { data: existingOrd } = await supabase
         .from("orders")
         .select("id")
         .eq("id", orderId)
         .maybeSingle();
-
       if (existingOrd) {
-        const orderUpdates: any = {
-          status: statusUpper,
-        };
-        if (statusUpper === "COMPLETED" && orderTotal > 0) {
-          orderUpdates.cash_received = orderTotal;
-          orderUpdates.grand_total = orderTotal;
-        }
-
-        const { error: ordErr } = await supabase
-          .from("orders")
-          .update(orderUpdates)
-          .eq("id", orderId);
-
-        if (ordErr) {
-          console.error("Supabase orders update error:", ordErr);
-          throw new Error(`Failed to update orders table: ${ordErr.message}`);
-        }
-      } else if (statusUpper === "COMPLETED") {
-        const orderPayload: any = {
-          id: orderId,
-          customer_id: order?.customer_id || null,
-          source: "OFFLINE",
-          status: "COMPLETED",
-          is_gst: false,
-          subtotal: Number(order?.subtotal) || orderTotal,
-          discount_type: "FIXED",
-          discount_value: 0,
-          discount_amount: 0,
-          gst_percentage: 0,
-          gst_amount: 0,
-          delivery_fee: 0,
-          grand_total: orderTotal,
-          cash_received: orderTotal,
-          payment_mode: order?.deposit_payment_mode || "CASH",
-          bill_date: new Date().toISOString().split("T")[0],
-          is_advance: true,
-          order_type: "ADVANCE",
-          invoice_id: orderId,
-          created_at: order?.created_at || new Date().toISOString(),
-        };
-
-        const { error: insErr } = await supabase.from("orders").upsert(orderPayload);
-        if (insErr) {
-          console.error("Failed to upsert completed advance order to orders table:", insErr);
-          throw new Error(`Failed to sync completed advance order to orders: ${insErr.message}`);
-        }
-
-        if (order?.items && order.items.length > 0) {
-          const itemsToInsert = order.items.map((it: any, idx: number) => ({
-            id: `oi-${orderId}-${idx}`,
-            order_id: orderId,
-            product_id: it.product_id || null,
-            snapshot_name: it.snapshot_name || it.name || "Advance Item",
-            snapshot_price: Number(it.snapshot_price || it.price || 0),
-            quantity: Number(it.quantity || it.qty || 1),
-          }));
-          await supabase.from("order_items").upsert(itemsToInsert);
-        }
+        await supabase.from("orders").update({ status: statusUpper }).eq("id", orderId);
       }
 
-      // 4. Trigger server-side cache revalidation
       try {
         await setAdvanceOrderStatus(orderId, statusUpper);
       } catch (actErr) {
         console.warn("Server action status revalidation notice:", actErr);
       }
 
-      // 5. Invalidate Next.js cache and refresh data queries
       await loadData(true);
       router.refresh();
     } catch (err: any) {
@@ -328,15 +313,33 @@ export default function AdminAdvanceOrdersPage() {
   const countCompleted = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "COMPLETED").length;
   const countCancelled = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "CANCELLED").length;
 
-  // Real-time Outstanding Balance from active (PENDING / READY) orders
-  const pendingOrders = advanceOrders.filter((a) => {
+  // Real-time Outstanding Balance from all non-cancelled orders
+  const activeOrders = advanceOrders.filter((a) => {
     const st = (a.status || "PENDING").toUpperCase();
-    return st === "PENDING" || st === "READY";
+    return st !== "CANCELLED";
   });
-  const outstandingBalance = pendingOrders.reduce((sum, a) => {
-    const tot = Number(a.total_amount ?? (a as any).total ?? (a as any).grand_total ?? 0);
-    const paid = Number(a.deposit_amount ?? (a as any).amount_paid ?? 0);
-    return sum + Math.max(0, tot - paid);
+  const outstandingBalance = activeOrders.reduce((sum, a) => {
+    const totals = calculateAdvanceOrderTotals({
+      items: (a.items || []).map((it) => ({
+        price: Number(it.snapshot_price) || 0,
+        qty: Number(it.quantity) || 1,
+      })),
+      subtotal: Number(a.subtotal) || Number(a.total_amount) || 0,
+      isGst: a.is_gst !== undefined ? Boolean(a.is_gst) : undefined,
+      gstPercentage: a.gst_percentage !== undefined ? Number(a.gst_percentage) : undefined,
+      taxMode: a.tax_mode || "exclusive",
+      manualDiscount:
+        Number(a.discount_amount) > 0 || Number(a.discount_value) > 0
+          ? {
+              type: ((a.discount_type || "FIXED").toUpperCase() as any),
+              value: Number(a.discount_value) || Number(a.discount_amount) || 0,
+            }
+          : null,
+      deliveryFee: Number(a.delivery_fee) || 0,
+      advanceAmount: Number(a.deposit_amount) || 0,
+      grandTotal: Number(a.total_amount) || undefined,
+    });
+    return sum + totals.remainingBalance;
   }, 0);
 
   return (
@@ -397,7 +400,7 @@ export default function AdminAdvanceOrdersPage() {
                 ₹{outstandingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
               <p className="text-[10px] text-slate-400 mt-0.5">
-                {pendingOrders.length} pending / ready orders awaiting balance
+                {activeOrders.length} active orders awaiting balance
               </p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600">
@@ -523,9 +526,29 @@ export default function AdminAdvanceOrdersPage() {
                 </tr>
               ) : (
                 filteredOrders.map((a: AdvanceOrderWithRelations) => {
-                  const total = Number(a.total_amount) || 0;
-                  const paid = Number(a.deposit_amount) || 0;
-                  const balanceDue = Math.max(0, total - paid);
+                  const totals = calculateAdvanceOrderTotals({
+                    items: (a.items || []).map((it) => ({
+                      price: Number(it.snapshot_price) || 0,
+                      qty: Number(it.quantity) || 1,
+                    })),
+                    subtotal: Number(a.subtotal) || Number(a.total_amount) || 0,
+                    isGst: a.is_gst !== undefined ? Boolean(a.is_gst) : undefined,
+                    gstPercentage: a.gst_percentage !== undefined ? Number(a.gst_percentage) : undefined,
+                    taxMode: a.tax_mode || "exclusive",
+                    manualDiscount:
+                      Number(a.discount_amount) > 0 || Number(a.discount_value) > 0
+                        ? {
+                            type: (((a.discount_type || "FIXED").toUpperCase() as any)),
+                            value: Number(a.discount_value) || Number(a.discount_amount) || 0,
+                          }
+                        : null,
+                    deliveryFee: Number(a.delivery_fee) || 0,
+                    advanceAmount: Number(a.deposit_amount) || 0,
+                    grandTotal: Number(a.total_amount) || undefined,
+                  });
+                  const total = totals.grandTotal;
+                  const paid = totals.totalPaid;
+                  const balanceDue = totals.remainingBalance;
                   const statusUpper = (a.status || "PENDING").toUpperCase();
 
                   return (
@@ -588,6 +611,7 @@ export default function AdminAdvanceOrdersPage() {
                       <td className="w-[12%] text-center px-4 py-3 align-middle">
                         <div className="relative inline-block w-full max-w-[150px] mx-auto">
                           <select
+                            key={`adv-status-admin-${a.id}-${statusUpper}`}
                             value={statusUpper}
                             onChange={(e) => handleStatusChange(a.id, e.target.value, a)}
                             className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
@@ -676,6 +700,253 @@ export default function AdminAdvanceOrdersPage() {
           </table>
         </div>
       </div>
+
+      {/* ── Receive Remaining Payment Modal ───────────────────────────── */}
+      {receiveModalOrder && (() => {
+        const baseTotals = getAdvanceTotals(receiveModalOrder);
+        const settlementCalc = calculateAdvanceOrderTotals({
+          items: (receiveModalOrder.items || []).map((it) => ({
+            price: Number(it.snapshot_price) || 0,
+            qty: Number(it.quantity) || 1,
+          })),
+          subtotal: baseTotals.subtotal,
+          isGst: (receiveModalOrder as any).is_gst !== undefined ? Boolean((receiveModalOrder as any).is_gst) : undefined,
+          gstPercentage: (receiveModalOrder as any).gst_percentage !== undefined ? Number((receiveModalOrder as any).gst_percentage) : undefined,
+          taxMode: (receiveModalOrder as any).tax_mode || "exclusive",
+          deliveryFee: Number((receiveModalOrder as any).delivery_fee) || 0,
+          couponDiscount: appliedCoupon ? { type: appliedCoupon.type, value: appliedCoupon.value } : null,
+          manualDiscount:
+            receiveDiscountValue !== "" && Number(receiveDiscountValue) > 0
+              ? { type: receiveDiscountType, value: Number(receiveDiscountValue) }
+              : null,
+          advanceAmount: Number(receiveModalOrder.deposit_amount) || 0,
+        });
+
+        const confirmReceiveBalance = async () => {
+          if (!receiveModalOrder || isFinalizingLock.current || isFinalizing) return;
+          if (!settlementCalc.isValid) {
+            alert(settlementCalc.errorMessage || "Discount is too high.");
+            return;
+          }
+          isFinalizingLock.current = true;
+          setIsFinalizing(true);
+          try {
+            const yr = new Date().getFullYear();
+            const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
+            const invoiceId = `INV-${yr}-${rand}`;
+
+            // Open WhatsApp directly in click handler to avoid popup blockers
+            const cleanPhone = (receiveModalOrder.customer_phone || "").replace(/\D/g, "").slice(-10);
+            let waUrl = "";
+            if (cleanPhone && cleanPhone.length === 10) {
+              const shopEmoji = String.fromCodePoint(0x2728);
+              const checkEmoji = String.fromCodePoint(0x2705);
+              let msg = `${shopEmoji} *Love & Happy Unisex Salon* ${shopEmoji}\n\n`;
+              msg += `${checkEmoji} *Payment Received & Order Completed!*\n\n`;
+              msg += `Customer: ${receiveModalOrder.customer_name || "Valued Customer"}\n`;
+              msg += `Deposit ID: ${receiveModalOrder.id}\n`;
+              msg += `Official Invoice: ${invoiceId}\n`;
+              msg += `Amount Paid Now: ₹${settlementCalc.remainingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n`;
+              msg += `Payment Method: ${receivePaymentMode === "GPAY" ? "UPI / GPay" : receivePaymentMode}\n`;
+              msg += `Total Bill: ₹${settlementCalc.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n`;
+              msg += `Balance Due: ₹0.00\n\n`;
+              msg += `Thank you for choosing Love & Happy Unisex Salon. We look forward to serving you again!`;
+              waUrl = `https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`;
+            }
+            if (waUrl) window.open(waUrl, "_blank");
+
+            await finalizeAdvanceOrder({
+              advanceOrderId: receiveModalOrder.id,
+              invoiceId,
+              isGst: settlementCalc.gstPercentage > 0,
+              gstPercentage: settlementCalc.gstPercentage,
+              discountType: receiveDiscountType,
+              discountValue: Number(receiveDiscountValue) || 0,
+              discountAmount: settlementCalc.discountAmount,
+              deliveryFee: 0,
+              paymentMode: receivePaymentMode,
+              billDate: new Date().toISOString(),
+            });
+
+            closeReceiveModal();
+            await loadData(true);
+            router.refresh();
+
+            if (!waUrl) {
+              alert(`Payment confirmed! Official Invoice: ${invoiceId}. (No customer phone for WhatsApp).`);
+            }
+          } catch (err: any) {
+            console.error("Finalize advance order error:", err);
+            alert(`Could not finalize the advance order: ${err?.message || "Please try again."}`);
+          } finally {
+            isFinalizingLock.current = false;
+            setIsFinalizing(false);
+          }
+        };
+
+        return (
+          <div
+            className="fixed inset-0 z-[500] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm"
+            onClick={(e) => { if (e.target === e.currentTarget) closeReceiveModal(); }}
+          >
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md p-5 sm:p-6 max-h-[90vh] overflow-y-auto border-t-4 border-emerald-500">
+              <div className="space-y-4">
+                {/* Header */}
+                <div className="flex justify-between items-start">
+                  <div>
+                    <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200">
+                      {receiveModalOrder.id}
+                    </span>
+                    <h3 className="text-lg font-black text-gray-900 tracking-tight mt-1">Receive Remaining Payment</h3>
+                    <p className="text-xs text-gray-500">
+                      {receiveModalOrder.customer_name || "Customer"} • {receiveModalOrder.customer_phone || "No phone"}
+                    </p>
+                  </div>
+                  <button
+                    onClick={closeReceiveModal}
+                    className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+
+                {/* Remaining Amount card */}
+                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
+                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">REMAINING AMOUNT</p>
+                  <p className="text-3xl font-black text-emerald-700 mt-0.5">
+                    ₹{settlementCalc.remainingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                  <div className="flex justify-center gap-4 mt-2 text-[11px] text-emerald-900/80 font-medium border-t border-emerald-200/60 pt-2">
+                    <span>Order Total: ₹{settlementCalc.grandTotal.toFixed(2)}</span>
+                    <span>•</span>
+                    <span>Already Paid: ₹{settlementCalc.advancePaid.toFixed(2)}</span>
+                  </div>
+                </div>
+
+                {/* Coupon Code */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Coupon Code (Optional)</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={receiveCouponCode}
+                      onChange={(e) => { setReceiveCouponCode(e.target.value.toUpperCase()); setCouponError(null); }}
+                      placeholder="e.g. WELCOME10"
+                      className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 uppercase focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const code = receiveCouponCode.trim().toUpperCase();
+                        if (!code) { setAppliedCoupon(null); setCouponError(null); return; }
+                        // Simple validation: if code is non-empty treat as free-text coupon
+                        // (no coupon DB in admin page; reject unknown codes)
+                        setCouponError("Coupon validation is available on the POS page.");
+                      }}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                  {appliedCoupon && (
+                    <div className="mt-1.5 flex items-center justify-between text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
+                      <span className="font-bold">✓ {appliedCoupon.code} (-₹{settlementCalc.couponDiscountAmount.toFixed(2)})</span>
+                      <button type="button" onClick={() => { setAppliedCoupon(null); setReceiveCouponCode(""); }} className="text-xs text-rose-600 hover:underline font-bold cursor-pointer">Remove</button>
+                    </div>
+                  )}
+                  {couponError && <p className="mt-1 text-[11px] font-semibold text-rose-600">{couponError}</p>}
+                </div>
+
+                {/* Manual Discount */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Manual Discount</label>
+                  <div className="flex gap-2">
+                    <select
+                      value={receiveDiscountType}
+                      onChange={(e) => setReceiveDiscountType(e.target.value as "FIXED" | "PERCENT")}
+                      className="bg-white border border-gray-300 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="FIXED">₹</option>
+                      <option value="PERCENT">%</option>
+                    </select>
+                    <input
+                      type="number"
+                      min="0"
+                      value={receiveDiscountValue}
+                      onChange={(e) => setReceiveDiscountValue(e.target.value === "" ? "" : parseFloat(e.target.value))}
+                      onWheel={(e) => e.currentTarget.blur()}
+                      placeholder="Discount amount"
+                      className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none"
+                    />
+                  </div>
+                  {settlementCalc.manualDiscountAmount > 0 && (
+                    <p className="mt-1 text-[11px] text-gray-500 font-medium">Manual discount: -₹{settlementCalc.manualDiscountAmount.toFixed(2)}</p>
+                  )}
+                </div>
+
+                {/* Payment Method */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Payment Method</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["CASH", "GPAY", "SPLIT"] as const).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setReceivePaymentMode(mode)}
+                        className={`py-2 px-1 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
+                          receivePaymentMode === mode
+                            ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
+                            : "bg-white text-gray-700 border-gray-200 hover:border-emerald-500"
+                        }`}
+                      >
+                        {mode === "GPAY" ? "UPI / GPay" : mode === "CASH" ? "Cash" : "Card / Split"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Payment Notes */}
+                <div>
+                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Payment Notes (Optional)</label>
+                  <textarea
+                    value={receivePaymentNotes}
+                    onChange={(e) => setReceivePaymentNotes(e.target.value)}
+                    placeholder="e.g. Settle remaining via UPI..."
+                    className="w-full bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none min-h-[60px] resize-none"
+                  />
+                </div>
+
+                {/* Info box */}
+                <div className="bg-amber-50 border border-amber-300/80 rounded-xl p-3 text-[11px] text-amber-900 font-medium">
+                  Confirmation marks the order Completed, creates one official invoice, and recognizes the full ₹{settlementCalc.grandTotal.toFixed(2)} as revenue.
+                </div>
+
+                {/* Validation error */}
+                {!settlementCalc.isValid && (
+                  <div className="bg-rose-50 border border-rose-300 rounded-xl p-2.5 text-xs text-rose-700 font-bold">
+                    {settlementCalc.errorMessage || "Discount cannot reduce the total below the amount already paid."}
+                  </div>
+                )}
+
+                {/* Confirm button */}
+                <button
+                  onClick={confirmReceiveBalance}
+                  disabled={isFinalizing || !settlementCalc.isValid}
+                  className={`w-full py-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md transition-all ${
+                    isFinalizing || !settlementCalc.isValid ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
+                  }`}
+                >
+                  {isFinalizing ? (
+                    <><Loader2 className="w-4 h-4 animate-spin" /><span>Finalizing...</span></>
+                  ) : (
+                    <><Check className="w-4 h-4" /><span>Confirm Final Payment</span></>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

@@ -179,6 +179,14 @@ export async function createAdvanceOrder(payload: {
     snapshot_price: number;
     quantity: number;
   }[];
+  isGst?: boolean;
+  gstPercentage?: number;
+  gstAmount?: number;
+  taxMode?: 'exclusive' | 'inclusive';
+  discountType?: 'PERCENT' | 'FIXED';
+  discountValue?: number;
+  discountAmount?: number;
+  deliveryFee?: number;
 }): Promise<{ advanceOrderId: string }> {
   const result = await dbStore.createAdvanceOrder(payload);
   try {

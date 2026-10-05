@@ -23,6 +23,7 @@ import type {
   AdvanceOrderWithRelations,
 } from './types';
 import { LOVE_AND_HAPPY_CATEGORIES, LOVE_AND_HAPPY_PRODUCTS } from './catalogData';
+import { calculateAdvanceOrderTotals } from './advanceOrderCalculations';
 
 export interface CatalogItemDB {
   id: string;
@@ -659,24 +660,40 @@ export async function supabaseListOrdersWithRelations(): Promise<OrderWithRelati
   })) as OrderWithRelations[];
 
   const dedupedOrdersMap = new Map<string, OrderWithRelations>();
+
+  // Process rows from orders table
   for (const o of mapped) {
     if (!o.id) continue;
     const isAdvance = isAdvanceOrderRow(o);
     const status = String(o.status || '').toUpperCase();
-    if (isAdvance) {
-      if (status === 'COMPLETED') {
-        dedupedOrdersMap.set(o.id, o);
+
+    // Pending/ready/cancelled advance orders must never appear in orders list / analytics
+    if (isAdvance && status !== 'COMPLETED') {
+      continue;
+    }
+
+    if (
+      status === 'COMPLETED' ||
+      (!o.status && status !== 'CANCELLED' && status !== 'PENDING' && status !== 'READY')
+    ) {
+      let officialId = o.id;
+      // If legacy completed advance order still has DEP- id, normalize to official INV- id
+      if (officialId.startsWith('DEP-')) {
+        if (o.invoice_id && o.invoice_id.startsWith('INV-')) {
+          officialId = o.invoice_id;
+        } else {
+          const cleanSuffix = o.id.replace(/[^A-Za-z0-9]/g, '').slice(-5).toUpperCase();
+          const yr = o.created_at ? new Date(o.created_at).getFullYear() : new Date().getFullYear();
+          officialId = `INV-${yr}-${cleanSuffix}`;
+        }
+        o.id = officialId;
+        o.invoice_id = officialId;
       }
-    } else {
-      if (
-        status === 'COMPLETED' ||
-        (!o.status && status !== 'CANCELLED' && status !== 'PENDING' && status !== 'READY')
-      ) {
-        dedupedOrdersMap.set(o.id, o);
-      }
+      dedupedOrdersMap.set(officialId, o);
     }
   }
 
+  // Process completed advance orders to ensure every completed advance order has an official INV invoice in analytics
   try {
     const { data: compAdvances } = await supabase
       .from('advance_orders')
@@ -701,35 +718,59 @@ export async function supabaseListOrdersWithRelations(): Promise<OrderWithRelati
     if (compAdvances && compAdvances.length > 0) {
       for (const a of compAdvances) {
         if (!a.id) continue;
-        if (!dedupedOrdersMap.has(a.id) && (!a.finalized_order_id || !dedupedOrdersMap.has(a.finalized_order_id))) {
-          dedupedOrdersMap.set(a.id, {
-            id: a.id,
+
+        // Determine official INV- id
+        const officialInvId = a.finalized_order_id;
+        if (!officialInvId || !officialInvId.startsWith('INV-')) {
+          // Revenue recognition only happens through the official INV invoice created on final payment
+          continue;
+        }
+
+        // Clean up legacy DEP key if present
+        if (dedupedOrdersMap.has(a.id)) {
+          const existing = dedupedOrdersMap.get(a.id)!;
+          dedupedOrdersMap.delete(a.id);
+          existing.id = officialInvId;
+          existing.invoice_id = officialInvId;
+          dedupedOrdersMap.set(officialInvId, existing);
+          continue;
+        }
+
+        if (!dedupedOrdersMap.has(officialInvId)) {
+          const grandTotal = Number(a.total_amount ?? a.deposit_amount ?? 0);
+          dedupedOrdersMap.set(officialInvId, {
+            id: officialInvId,
             customer_id: a.customer_id,
             source: 'OFFLINE',
             status: 'COMPLETED',
-            is_gst: false,
-            subtotal: Number(a.subtotal) || 0,
+            is_gst: Boolean(a.is_gst),
+            subtotal: Number(a.subtotal) || grandTotal,
             discount_type: 'FIXED',
             discount_value: 0,
             discount_amount: 0,
-            gst_percentage: 0,
-            gst_amount: 0,
+            gst_percentage: Number(a.gst_percentage) || 0,
+            gst_amount: Number(a.gst_amount) || 0,
             delivery_fee: 0,
-            grand_total: Number(a.total_amount ?? a.deposit_amount ?? 0),
-            cash_received: Number(a.total_amount ?? a.deposit_amount ?? 0),
+            grand_total: grandTotal,
+            cash_received: grandTotal,
             split_cash: 0,
             split_gpay: 0,
             payment_mode: a.deposit_payment_mode || 'CASH',
-            bill_date: a.finalized_at ? a.finalized_at.split('T')[0] : (a.created_at ? a.created_at.split('T')[0] : new Date().toISOString().split('T')[0]),
+            bill_date: a.finalized_at
+              ? a.finalized_at.split('T')[0]
+              : a.created_at
+              ? a.created_at.split('T')[0]
+              : new Date().toISOString().split('T')[0],
             created_at: a.created_at || new Date().toISOString(),
             is_advance: true,
             order_type: 'ADVANCE',
+            invoice_id: officialInvId,
             customer_name: a.customers?.name || 'Walk-in Customer',
             customer_phone: a.customers?.phone || '',
             customer_address: a.customers?.address || null,
             items: (a.advance_order_items || []).map((it: any) => ({
               id: it.id,
-              order_id: a.id,
+              order_id: officialInvId,
               product_id: it.product_id || null,
               snapshot_name: it.snapshot_name,
               snapshot_price: Number(it.snapshot_price) || 0,
@@ -743,13 +784,17 @@ export async function supabaseListOrdersWithRelations(): Promise<OrderWithRelati
     // Ignore secondary fetch error
   }
 
-  const resultList = Array.from(dedupedOrdersMap.values());
+  // Defensive: Analytics and Order history must only show official INV IDs
+  const resultList = Array.from(dedupedOrdersMap.values()).filter(
+    (o) => String(o.id || '').startsWith('INV-') && o.status === 'COMPLETED'
+  );
   resultList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   return resultList;
 }
 
 export async function supabaseGetOrderWithRelations(id: string): Promise<OrderWithRelations | null> {
-  const { data: order, error } = await supabase
+  // 1. Try orders table by id
+  let { data: order, error } = await supabase
     .from('orders')
     .select(`
       *,
@@ -770,7 +815,109 @@ export async function supabaseGetOrderWithRelations(id: string): Promise<OrderWi
     .eq('id', id)
     .maybeSingle();
 
-  if (error || !order) return null;
+  // 2. If not found by primary key, try orders table by invoice_id
+  if (!order) {
+    const { data: byInv } = await supabase
+      .from('orders')
+      .select(`
+        *,
+        customers (
+          name,
+          phone,
+          address
+        ),
+        order_items (
+          id,
+          order_id,
+          product_id,
+          snapshot_name,
+          snapshot_price,
+          quantity
+        )
+      `)
+      .eq('invoice_id', id)
+      .maybeSingle();
+    if (byInv) order = byInv;
+  }
+
+  // 3. If still not found, check advance_orders table (for DEP- IDs or unfinalized / legacy records)
+  if (!order) {
+    const { data: adv } = await supabase
+      .from('advance_orders')
+      .select(`
+        *,
+        customers (
+          name,
+          phone,
+          address
+        ),
+        advance_order_items (
+          id,
+          advance_order_id,
+          product_id,
+          snapshot_name,
+          snapshot_price,
+          quantity
+        )
+      `)
+      .or(`id.eq.${id},finalized_order_id.eq.${id}`)
+      .maybeSingle();
+
+    if (adv) {
+      // If completed with a linked finalized_order_id, attempt to fetch that invoice
+      if (adv.status === 'COMPLETED' && adv.finalized_order_id && adv.finalized_order_id !== id) {
+        const finalized = await supabaseGetOrderWithRelations(adv.finalized_order_id);
+        if (finalized) return finalized;
+      }
+
+      // Rebuild OrderWithRelations from advance_order on the fly
+      const isCompleted = adv.status === 'COMPLETED';
+      const grandTotal = Number(adv.total_amount) || 0;
+      const deposit = Number(adv.deposit_amount) || 0;
+
+      return {
+        id: adv.finalized_order_id || adv.id,
+        customer_id: adv.customer_id,
+        source: 'OFFLINE',
+        status: isCompleted ? 'COMPLETED' : 'PENDING',
+        is_gst: Boolean(adv.is_gst),
+        subtotal: Number(adv.subtotal) || grandTotal,
+        discount_type: 'FIXED',
+        discount_value: 0,
+        discount_amount: 0,
+        gst_percentage: Number(adv.gst_percentage) || 0,
+        gst_amount: Number(adv.gst_amount) || 0,
+        delivery_fee: 0,
+        grand_total: grandTotal,
+        cash_received: deposit,
+        split_cash: 0,
+        split_gpay: 0,
+        payment_mode: adv.deposit_payment_mode || 'CASH',
+        bill_date: adv.finalized_at
+          ? adv.finalized_at.split('T')[0]
+          : adv.created_at
+          ? adv.created_at.split('T')[0]
+          : new Date().toISOString().split('T')[0],
+        created_at: adv.created_at || new Date().toISOString(),
+        is_advance: true,
+        order_type: 'ADVANCE',
+        invoice_id: adv.finalized_order_id || adv.id,
+        customer_name: adv.customers?.name || 'Walk-in Customer',
+        customer_phone: adv.customers?.phone || '',
+        customer_address: adv.customers?.address || null,
+        items: (adv.advance_order_items || []).map((it: any) => ({
+          id: it.id,
+          order_id: adv.id,
+          product_id: it.product_id || null,
+          snapshot_name: it.snapshot_name,
+          snapshot_price: Number(it.snapshot_price) || 0,
+          quantity: Number(it.quantity) || 1,
+        })),
+      } as OrderWithRelations;
+    }
+  }
+
+  if (!order) return null;
 
   return {
     id: order.id,
@@ -792,6 +939,9 @@ export async function supabaseGetOrderWithRelations(id: string): Promise<OrderWi
     payment_mode: order.payment_mode,
     bill_date: order.bill_date,
     created_at: order.created_at,
+    is_advance: order.is_advance,
+    order_type: order.order_type,
+    invoice_id: order.invoice_id || order.id,
     customer_name: order.customers?.name || 'Walk-in Customer',
     customer_phone: order.customers?.phone || '',
     customer_address: order.customers?.address || null,
@@ -928,7 +1078,44 @@ export async function supabaseListAdvanceOrders(): Promise<AdvanceOrderWithRelat
       customer_phone: r.customers?.phone || '',
       customer_address: r.customers?.address || null,
       items: (r.advance_order_items || []) as AdvanceOrderItemRow[],
+      is_gst: r.is_gst !== undefined ? Boolean(r.is_gst) : undefined,
+      gst_percentage: r.gst_percentage !== undefined ? Number(r.gst_percentage) : undefined,
+      gst_amount: r.gst_amount !== undefined ? Number(r.gst_amount) : undefined,
+      tax_mode: r.tax_mode,
+      discount_type: r.discount_type,
+      discount_value: r.discount_value !== undefined ? Number(r.discount_value) : undefined,
+      discount_amount: r.discount_amount !== undefined ? Number(r.discount_amount) : undefined,
+      delivery_fee: r.delivery_fee !== undefined ? Number(r.delivery_fee) : undefined,
     }));
+
+    try {
+      const advIds = advList.map((a) => a.id).filter(Boolean);
+      if (advIds.length > 0) {
+        const { data: matchedOrders } = await supabase
+          .from('orders')
+          .select('id, is_gst, gst_percentage, gst_amount, discount_type, discount_value, discount_amount, delivery_fee, grand_total')
+          .in('id', advIds);
+
+        if (matchedOrders && matchedOrders.length > 0) {
+          const orderMap = new Map(matchedOrders.map((o) => [o.id, o]));
+          for (const a of advList) {
+            const ord = orderMap.get(a.id);
+            if (ord) {
+              if (a.is_gst === undefined && ord.is_gst !== undefined) a.is_gst = Boolean(ord.is_gst);
+              if (a.gst_percentage === undefined && ord.gst_percentage !== undefined) a.gst_percentage = Number(ord.gst_percentage);
+              if (a.gst_amount === undefined && ord.gst_amount !== undefined) a.gst_amount = Number(ord.gst_amount);
+              if (a.discount_type === undefined && ord.discount_type) a.discount_type = ord.discount_type;
+              if (a.discount_value === undefined && ord.discount_value !== undefined) a.discount_value = Number(ord.discount_value);
+              if (a.discount_amount === undefined && ord.discount_amount !== undefined) a.discount_amount = Number(ord.discount_amount);
+              if (a.delivery_fee === undefined && ord.delivery_fee !== undefined) a.delivery_fee = Number(ord.delivery_fee);
+              if (!a.total_amount && ord.grand_total) a.total_amount = Number(ord.grand_total);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // Ignore
+    }
 
     const existingIds = new Set<string>();
     for (const a of advList) {
@@ -988,6 +1175,14 @@ export async function supabaseListAdvanceOrders(): Promise<AdvanceOrderWithRelat
                 snapshot_price: Number(i.snapshot_price) || 0,
                 quantity: Number(i.quantity) || 1,
               })),
+              is_gst: o.is_gst !== undefined ? Boolean(o.is_gst) : undefined,
+              gst_percentage: o.gst_percentage !== undefined ? Number(o.gst_percentage) : undefined,
+              gst_amount: o.gst_amount !== undefined ? Number(o.gst_amount) : undefined,
+              tax_mode: o.tax_mode,
+              discount_type: o.discount_type,
+              discount_value: o.discount_value !== undefined ? Number(o.discount_value) : undefined,
+              discount_amount: o.discount_amount !== undefined ? Number(o.discount_amount) : undefined,
+              delivery_fee: o.delivery_fee !== undefined ? Number(o.delivery_fee) : undefined,
             });
             existingIds.add(o.id);
             if (o.invoice_id) existingIds.add(o.invoice_id);
@@ -1039,7 +1234,7 @@ export async function supabaseGetAdvanceOrder(id: string): Promise<AdvanceOrderW
 
   if (error || !r) return null;
 
-  return {
+  const res: AdvanceOrderWithRelations = {
     id: r.id,
     customer_id: r.customer_id,
     status: r.status as AdvanceOrderStatus,
@@ -1057,7 +1252,37 @@ export async function supabaseGetAdvanceOrder(id: string): Promise<AdvanceOrderW
     customer_phone: r.customers?.phone || '',
     customer_address: r.customers?.address || null,
     items: (r.advance_order_items || []) as AdvanceOrderItemRow[],
-  } as AdvanceOrderWithRelations;
+    is_gst: r.is_gst !== undefined ? Boolean(r.is_gst) : undefined,
+    gst_percentage: r.gst_percentage !== undefined ? Number(r.gst_percentage) : undefined,
+    gst_amount: r.gst_amount !== undefined ? Number(r.gst_amount) : undefined,
+    tax_mode: r.tax_mode,
+    discount_type: r.discount_type,
+    discount_value: r.discount_value !== undefined ? Number(r.discount_value) : undefined,
+    discount_amount: r.discount_amount !== undefined ? Number(r.discount_amount) : undefined,
+    delivery_fee: r.delivery_fee !== undefined ? Number(r.delivery_fee) : undefined,
+  };
+
+  if (res.is_gst === undefined || res.gst_percentage === undefined) {
+    try {
+      const { data: ord } = await supabase
+        .from('orders')
+        .select('is_gst, gst_percentage, gst_amount, discount_type, discount_value, discount_amount, delivery_fee, grand_total')
+        .eq('id', id)
+        .maybeSingle();
+      if (ord) {
+        if (res.is_gst === undefined && ord.is_gst !== undefined) res.is_gst = Boolean(ord.is_gst);
+        if (res.gst_percentage === undefined && ord.gst_percentage !== undefined) res.gst_percentage = Number(ord.gst_percentage);
+        if (res.gst_amount === undefined && ord.gst_amount !== undefined) res.gst_amount = Number(ord.gst_amount);
+        if (res.discount_type === undefined && ord.discount_type) res.discount_type = ord.discount_type;
+        if (res.discount_value === undefined && ord.discount_value !== undefined) res.discount_value = Number(ord.discount_value);
+        if (res.discount_amount === undefined && ord.discount_amount !== undefined) res.discount_amount = Number(ord.discount_amount);
+        if (res.delivery_fee === undefined && ord.delivery_fee !== undefined) res.delivery_fee = Number(ord.delivery_fee);
+        if (!res.total_amount && ord.grand_total) res.total_amount = Number(ord.grand_total);
+      }
+    } catch (e) {}
+  }
+
+  return res;
 }
 
 export async function supabaseAdvanceOrderIdExists(id: string): Promise<boolean> {
@@ -1089,6 +1314,14 @@ export async function supabaseCreateAdvanceOrder(payload: {
     snapshot_price: number;
     quantity: number;
   }[];
+  isGst?: boolean;
+  gstPercentage?: number;
+  gstAmount?: number;
+  taxMode?: 'exclusive' | 'inclusive';
+  discountType?: 'PERCENT' | 'FIXED';
+  discountValue?: number;
+  discountAmount?: number;
+  deliveryFee?: number;
 }): Promise<{ advanceOrderId: string }> {
   let advId = payload.advanceOrderId;
   if (!advId || !advId.startsWith('DEP-')) {
@@ -1104,12 +1337,33 @@ export async function supabaseCreateAdvanceOrder(payload: {
     payload.customerAddress
   );
 
+  const calc = calculateAdvanceOrderTotals({
+    items: payload.items.map((it) => ({
+      price: Number(it.snapshot_price) || 0,
+      qty: Number(it.quantity) || 1,
+    })),
+    subtotal: Number(payload.subtotal) || 0,
+    isGst: Boolean(payload.isGst),
+    gstPercentage: Number(payload.gstPercentage) || 0,
+    taxMode: payload.taxMode || 'exclusive',
+    manualDiscount:
+      Number(payload.discountAmount) > 0 || Number(payload.discountValue) > 0
+        ? {
+            type: payload.discountType || 'FIXED',
+            value: Number(payload.discountValue) || Number(payload.discountAmount) || 0,
+          }
+        : null,
+    deliveryFee: Number(payload.deliveryFee) || 0,
+    advanceAmount: Number(payload.depositAmount) || 0,
+    grandTotal: Number(payload.totalAmount) || undefined,
+  });
+
   const insertPayload: any = {
     id: advId,
     customer_id: customer.id,
     status: 'PENDING',
-    subtotal: Number(payload.subtotal) || 0,
-    total_amount: Number(payload.totalAmount) || 0,
+    subtotal: calc.subtotal,
+    total_amount: calc.grandTotal,
     deposit_amount: Number(payload.depositAmount) || 0,
     deposit_payment_mode: payload.depositPaymentMode || 'CASH',
     delivery_date: payload.deliveryDate ? payload.deliveryDate.split('T')[0] : null,
@@ -1118,6 +1372,14 @@ export async function supabaseCreateAdvanceOrder(payload: {
     order_type: 'ADVANCE',
     invoice_id: advId,
     created_at: new Date().toISOString(),
+    is_gst: calc.gstPercentage > 0,
+    gst_percentage: calc.gstPercentage,
+    gst_amount: calc.gstAmount,
+    tax_mode: payload.taxMode || 'exclusive',
+    discount_type: payload.discountType || 'FIXED',
+    discount_value: Number(payload.discountValue) || 0,
+    discount_amount: calc.discountAmount,
+    delivery_fee: calc.deliveryFee,
   };
 
   const { error: advErr } = await supabase.from('advance_orders').insert(insertPayload);
@@ -1127,6 +1389,14 @@ export async function supabaseCreateAdvanceOrder(payload: {
     delete insertPayload.is_advance;
     delete insertPayload.order_type;
     delete insertPayload.invoice_id;
+    delete insertPayload.is_gst;
+    delete insertPayload.gst_percentage;
+    delete insertPayload.gst_amount;
+    delete insertPayload.tax_mode;
+    delete insertPayload.discount_type;
+    delete insertPayload.discount_value;
+    delete insertPayload.discount_amount;
+    delete insertPayload.delivery_fee;
 
     const { error: retryErr } = await supabase.from('advance_orders').insert(insertPayload);
     if (retryErr) {
@@ -1161,15 +1431,15 @@ export async function supabaseCreateAdvanceOrder(payload: {
       customer_id: customer.id,
       source: 'OFFLINE',
       status: 'PENDING',
-      is_gst: false,
-      subtotal: Number(payload.subtotal) || 0,
-      discount_type: 'FIXED',
-      discount_value: 0,
-      discount_amount: 0,
-      gst_percentage: 0,
-      gst_amount: 0,
-      delivery_fee: 0,
-      grand_total: Number(payload.totalAmount) || 0,
+      is_gst: calc.gstPercentage > 0,
+      subtotal: calc.subtotal,
+      discount_type: payload.discountType || 'FIXED',
+      discount_value: Number(payload.discountValue) || 0,
+      discount_amount: calc.discountAmount,
+      gst_percentage: calc.gstPercentage,
+      gst_amount: calc.gstAmount,
+      delivery_fee: calc.deliveryFee,
+      grand_total: calc.grandTotal,
       cash_received: Number(payload.depositAmount) || 0,
       payment_mode: payload.depositPaymentMode || 'CASH',
       bill_date: new Date().toISOString().split('T')[0],
@@ -1194,16 +1464,11 @@ export async function supabaseUpdateAdvanceOrderStatus(id: string, status: Advan
     .eq('id', id)
     .maybeSingle();
 
-  const totalAmount = Number(advData?.total_amount ?? advData?.subtotal ?? 0);
-
   const advUpdates: any = {
     status: statusUpper,
   };
   if (statusUpper === 'COMPLETED') {
     advUpdates.finalized_at = new Date().toISOString();
-    if (totalAmount > 0) {
-      advUpdates.deposit_amount = totalAmount;
-    }
   } else if (statusUpper === 'CANCELLED') {
     advUpdates.cancelled_at = new Date().toISOString();
   }
@@ -1225,67 +1490,11 @@ export async function supabaseUpdateAdvanceOrderStatus(id: string, status: Advan
       .eq('id', id)
       .maybeSingle();
 
-    if (statusUpper === 'COMPLETED') {
-      const orderUpdates: any = {
-        status: 'COMPLETED',
-      };
-      if (totalAmount > 0) {
-        orderUpdates.cash_received = totalAmount;
-        orderUpdates.grand_total = totalAmount;
-      }
-
-      if (existingOrder) {
-        await supabase
-          .from('orders')
-          .update(orderUpdates)
-          .eq('id', id);
-      } else {
-        const fullAdv = await supabaseGetAdvanceOrder(id);
-        if (fullAdv) {
-          const orderPayload: any = {
-            id: id,
-            customer_id: fullAdv.customer_id,
-            source: 'OFFLINE',
-            status: 'COMPLETED',
-            is_gst: false,
-            subtotal: Number(fullAdv.subtotal) || totalAmount,
-            discount_type: 'FIXED',
-            discount_value: 0,
-            discount_amount: 0,
-            gst_percentage: 0,
-            gst_amount: 0,
-            delivery_fee: 0,
-            grand_total: totalAmount,
-            cash_received: totalAmount,
-            payment_mode: fullAdv.deposit_payment_mode || 'CASH',
-            bill_date: new Date().toISOString().split('T')[0],
-            is_advance: true,
-            order_type: 'ADVANCE',
-            invoice_id: id,
-            created_at: fullAdv.created_at || new Date().toISOString(),
-          };
-          await supabase.from('orders').upsert(orderPayload);
-
-          if (fullAdv.items && fullAdv.items.length > 0) {
-            const itemsToInsert = fullAdv.items.map((it: any, idx: number) => ({
-              id: `oi-${id}-${idx}`,
-              order_id: id,
-              product_id: it.product_id || null,
-              snapshot_name: it.snapshot_name,
-              snapshot_price: Number(it.snapshot_price) || 0,
-              quantity: Number(it.quantity) || 1,
-            }));
-            await supabase.from('order_items').upsert(itemsToInsert);
-          }
-        }
-      }
-    } else {
-      if (existingOrder) {
-        await supabase
-          .from('orders')
-          .update({ status: statusUpper })
-          .eq('id', id);
-      }
+    if (existingOrder) {
+      await supabase
+        .from('orders')
+        .update({ status: statusUpper })
+        .eq('id', id);
     }
   } catch (err) {
     console.error('Failed to sync advance order status to orders table:', err);
@@ -1334,77 +1543,104 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
     qty: it.quantity,
   }));
 
-  const rawSubtotal = cart.reduce((acc, i) => acc + i.price * i.qty, 0);
-  const netInclusive = Math.max(0, rawSubtotal - payload.discountAmount);
-  const gstAmount =
-    payload.isGst && payload.gstPercentage > 0
-      ? netInclusive - netInclusive / (1 + payload.gstPercentage / 100)
-      : 0;
-  const grandTotal = netInclusive + payload.deliveryFee;
+  // Pure single-source calculation logic
+  const calc = calculateAdvanceOrderTotals({
+    items: cart.map((i) => ({ price: i.price, qty: i.qty })),
+    isGst: Boolean(payload.isGst),
+    gstPercentage: Number(payload.gstPercentage) || 0,
+    manualDiscount:
+      payload.discountAmount > 0
+        ? { type: payload.discountType, value: payload.discountValue }
+        : null,
+    deliveryFee: Number(payload.deliveryFee) || 0,
+    advanceAmount: Number(advance.deposit_amount) || 0,
+    isCompleted: true,
+  });
 
-  // Update the existing advance order row ID directly.
-  // Do NOT insert a separate order with a new ID that would spawn a duplicate order!
-  const targetOrderId = payload.advanceOrderId;
+  // Official invoice number must start with INV-
+  let finalizedInvoiceId = payload.invoiceId;
+  if (!finalizedInvoiceId || !finalizedInvoiceId.startsWith('INV-')) {
+    const yr = new Date().getFullYear();
+    const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
+    finalizedInvoiceId = `INV-${yr}-${rand}`;
+  }
 
-  // 1. Update existing advance_orders row
+  // 1. Update advance_orders row: mark COMPLETED, record final recognized revenue, and store link to official invoice
+  const advUpdatePayload: any = {
+    status: 'COMPLETED',
+    subtotal: calc.subtotal,
+    total_amount: calc.grandTotal,
+    deposit_amount: calc.grandTotal,
+    finalized_order_id: finalizedInvoiceId,
+    finalized_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+    is_gst: calc.gstPercentage > 0,
+    gst_percentage: calc.gstPercentage,
+    gst_amount: calc.gstAmount,
+    discount_type: payload.discountType,
+    discount_value: payload.discountValue,
+    discount_amount: calc.discountAmount,
+  };
+
   const { error: advErr } = await supabase
     .from('advance_orders')
-    .update({
-      status: 'COMPLETED',
-      subtotal: rawSubtotal,
-      total_amount: grandTotal,
-      deposit_amount: grandTotal,
-      finalized_order_id: targetOrderId,
-      finalized_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', targetOrderId);
+    .update(advUpdatePayload)
+    .eq('id', payload.advanceOrderId);
 
   if (advErr) {
+    console.error('Failed to update advance_orders row on finalize with full fields:', advErr);
     await supabase
       .from('advance_orders')
       .update({
         status: 'COMPLETED',
-        subtotal: rawSubtotal,
-        total_amount: grandTotal,
-        deposit_amount: grandTotal,
-        finalized_order_id: targetOrderId,
+        subtotal: calc.subtotal,
+        total_amount: calc.grandTotal,
+        deposit_amount: calc.grandTotal,
+        finalized_order_id: finalizedInvoiceId,
         finalized_at: new Date().toISOString(),
       })
-      .eq('id', targetOrderId);
+      .eq('id', payload.advanceOrderId);
   }
 
-  // 2. Update existing orders row
+  // 2. Clean up any placeholder order previously created under DEP- ID
+  try {
+    await supabase.from('order_items').delete().eq('order_id', payload.advanceOrderId);
+    await supabase.from('orders').delete().eq('id', payload.advanceOrderId);
+  } catch (cleanErr) {
+    // Ignore cleanup error
+  }
+
+  // 3. Upsert official final invoice into orders table with id = finalizedInvoiceId (INV-...)
   const orderPayload: any = {
-    id: targetOrderId,
+    id: finalizedInvoiceId,
     customer_id: advance.customer_id,
     source: 'OFFLINE',
     status: 'COMPLETED',
     is_gst: Boolean(payload.isGst),
-    subtotal: rawSubtotal,
+    subtotal: calc.subtotal,
     discount_type: payload.discountType,
     discount_value: payload.discountValue,
-    discount_amount: payload.discountAmount,
-    gst_percentage: payload.isGst ? payload.gstPercentage : 0,
-    gst_amount: gstAmount,
-    delivery_fee: payload.deliveryFee,
-    grand_total: grandTotal,
-    cash_received: grandTotal,
+    discount_amount: calc.discountAmount,
+    gst_percentage: calc.gstPercentage,
+    gst_amount: calc.gstAmount,
+    delivery_fee: calc.deliveryFee,
+    grand_total: calc.grandTotal,
+    cash_received: calc.grandTotal,
     payment_mode: payload.paymentMode,
-    bill_date: payload.billDate ? payload.billDate.split('T')[0] : new Date().toISOString().split('T')[0],
+    bill_date: payload.billDate
+      ? payload.billDate.split('T')[0]
+      : new Date().toISOString().split('T')[0],
     is_advance: true,
     order_type: 'ADVANCE',
-    invoice_id: payload.invoiceId || targetOrderId,
+    invoice_id: finalizedInvoiceId,
   };
 
-  await supabase
-    .from('orders')
-    .upsert(orderPayload, { onConflict: 'id' });
+  await supabase.from('orders').upsert(orderPayload, { onConflict: 'id' });
 
-  // 3. Clean up and refresh order_items for targetOrderId
+  // 4. Upsert order_items for finalizedInvoiceId
   const itemsToInsert = cart.map((item) => ({
     id: uid(),
-    order_id: targetOrderId,
+    order_id: finalizedInvoiceId,
     product_id: item.product_id || null,
     snapshot_name: item.name || 'Advance Item',
     snapshot_price: Number(item.price) || 0,
@@ -1412,9 +1648,9 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
   }));
 
   if (itemsToInsert.length > 0) {
-    await supabase.from('order_items').delete().eq('order_id', targetOrderId);
+    await supabase.from('order_items').delete().eq('order_id', finalizedInvoiceId);
     await supabase.from('order_items').insert(itemsToInsert);
   }
 
-  return { orderId: targetOrderId };
+  return { orderId: finalizedInvoiceId };
 }

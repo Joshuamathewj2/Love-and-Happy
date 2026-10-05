@@ -1,4 +1,5 @@
 import React from "react";
+import { INVOICE_TERMS_AND_NOTES } from "@/lib/constants";
 
 // Clean Indian Number-to-Words Converter
 export function numberToWords(num: number): string {
@@ -282,8 +283,9 @@ export default function PrintableReceipt({ order }: PrintableReceiptProps) {
           {/* Terms & Notes */}
           <div className="text-[11px] text-slate-500 leading-relaxed pt-1 space-y-0.5">
             <p className="font-semibold text-slate-700 mb-0.5">Terms &amp; Notes:</p>
-            <p>• Goods once sold can only be exchanged within 7 days with this invoice.</p>
-            <p>• Parryware warranty as per manufacturer standard policy.</p>
+            {INVOICE_TERMS_AND_NOTES.map((term, i) => (
+              <p key={i}>• {term}</p>
+            ))}
           </div>
         </div>
 

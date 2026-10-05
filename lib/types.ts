@@ -104,6 +104,14 @@ export type AdvanceOrderRow = {
   finalized_at: string | null;
   cancelled_at: string | null;
   created_at: string;
+  is_gst?: boolean;
+  gst_percentage?: number;
+  gst_amount?: number;
+  tax_mode?: 'exclusive' | 'inclusive';
+  discount_type?: 'PERCENT' | 'FIXED';
+  discount_value?: number;
+  discount_amount?: number;
+  delivery_fee?: number;
 };
 
 export type AdvanceOrderItemRow = {
