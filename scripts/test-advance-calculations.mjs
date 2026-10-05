@@ -243,3 +243,27 @@ test("User Case 5: Legacy record without gst fields (stored grandTotal 1800, sub
   assert.equal(res.remainingBalance, 1200);
 });
 
+test("Same output for the same order across all statuses (Order Total 1770, Paid 770, Balance 1000)", () => {
+  const statuses = ["PENDING", "READY", "COMPLETED", "CANCELLED", "pending", "ready", "completed", "cancelled", ""];
+
+  for (const status of statuses) {
+    const res = calculateAdvanceOrderTotals({
+      subtotal: 1500,
+      isGst: true,
+      gstPercentage: 18,
+      taxMode: "exclusive",
+      advanceAmount: 770,
+      grandTotal: 1770,
+      // Pass isCompleted flag or status simulation if relevant
+      isCompleted: status.toUpperCase() === "COMPLETED",
+    });
+
+    assert.equal(res.grandTotal, 1770, `Grand total must be 1770 for status ${status}`);
+    assert.equal(res.advancePaid, 770, `Advance paid must be 770 for status ${status}`);
+    assert.equal(res.totalPaid, 770, `Total paid must be 770 for status ${status}`);
+    assert.equal(res.remainingBalance, 1000, `Remaining balance must be 1000 for status ${status}`);
+    assert.equal(res.isValid, true);
+  }
+});
+
+

@@ -236,12 +236,18 @@ export async function finalizeAdvanceOrder(payload: {
   deliveryFee: number;
   paymentMode: PaymentMode;
   billDate: string;
-}): Promise<{ orderId: string }> {
-  const result = await dbStore.finalizeAdvanceOrder(payload);
+}): Promise<{ success: boolean; orderId?: string; error?: string }> {
   try {
-    revalidatePath('/admin/orders');
-    revalidatePath('/admin/analytics');
-    revalidatePath('/admin/advance-orders');
-  } catch (e) {}
-  return result;
+    const result = await dbStore.finalizeAdvanceOrder(payload);
+    try {
+      revalidatePath('/admin/orders');
+      revalidatePath('/admin/analytics');
+      revalidatePath('/admin/advance-orders');
+      revalidatePath('/pos/admin/secure/control-panel/love-and-happy');
+    } catch (e) {}
+    return { success: true, orderId: result.orderId };
+  } catch (err: any) {
+    console.error('[finalizeAdvanceOrder Action Error]:', err);
+    return { success: false, error: err?.message || 'Failed to finalize advance order' };
+  }
 }

@@ -1389,6 +1389,16 @@ export default function POSBilling() {
     setAdvanceOrders((prev) => [...prev]);
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && advanceViewMode) {
+        closeAdvanceDialog();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [advanceViewMode]);
+
   const balanceRemaining = (adv: AdvanceOrderWithRelations) => {
     return getAdvanceTotals(adv).remainingBalance;
   };
@@ -1430,7 +1440,7 @@ export default function POSBilling() {
       const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
       const invoiceId = `INV-${yr}-${rand}`;
 
-      // Open WhatsApp directly from click handler to avoid popup blockers
+      // Prepare WhatsApp message
       const cleanPhone = (selectedAdvance.customer_phone || "").replace(/\D/g, "").slice(-10);
       let waUrl = "";
       if (cleanPhone) {
@@ -1449,11 +1459,7 @@ export default function POSBilling() {
         waUrl = `https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`;
       }
 
-      if (waUrl) {
-        window.open(waUrl, "_blank");
-      }
-
-      await finalizeAdvanceOrder({
+      const res = await finalizeAdvanceOrder({
         advanceOrderId: selectedAdvance.id,
         invoiceId,
         isGst: receiveIsGst,
@@ -1466,6 +1472,16 @@ export default function POSBilling() {
         billDate: new Date().toISOString(),
       });
 
+      if (!res?.success) {
+        console.error("SUPABASE FINALIZE ADVANCE ORDER ERROR:", res?.error);
+        alert("Could not complete the order, please try again");
+        return;
+      }
+
+      if (waUrl) {
+        window.open(waUrl, "_blank");
+      }
+
       closeAdvanceDialog();
       await fetchData();
 
@@ -1474,7 +1490,7 @@ export default function POSBilling() {
       }
     } catch (err: any) {
       console.error("SUPABASE FINALIZE ADVANCE ORDER ERROR:", err);
-      alert(`Could not finalize the advance order: ${err?.message || "Please try again."}`);
+      alert("Could not complete the order, please try again");
     } finally {
       isFinalizingLock.current = false;
       setIsFinalizing(false);
@@ -1513,6 +1529,7 @@ export default function POSBilling() {
     }
   };
 
+  // Status change must never modify total/paid/balance. Only a saved payment record can.
   const handleStatusChange = async (orderId: string, newStatus: string) => {
     const adv = advanceOrders.find((a) => a.id === orderId);
     if (!adv) return;

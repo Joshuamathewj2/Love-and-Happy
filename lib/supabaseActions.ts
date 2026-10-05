@@ -752,7 +752,7 @@ export async function supabaseListOrdersWithRelations(): Promise<OrderWithRelati
             gst_amount: Number(a.gst_amount) || 0,
             delivery_fee: 0,
             grand_total: grandTotal,
-            cash_received: grandTotal,
+            cash_received: Number(a.deposit_amount) || grandTotal,
             split_cash: 0,
             split_gpay: 0,
             payment_mode: a.deposit_payment_mode || 'CASH',
@@ -1456,6 +1456,7 @@ export async function supabaseCreateAdvanceOrder(payload: {
   return { advanceOrderId: advId };
 }
 
+// Status change must never modify total/paid/balance. Only a saved payment record can.
 export async function supabaseUpdateAdvanceOrderStatus(id: string, status: AdvanceOrderStatus): Promise<void> {
   const statusUpper = String(status || '').trim().toUpperCase() as AdvanceOrderStatus;
   const { data: advData } = await supabase
@@ -1531,16 +1532,18 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
 }): Promise<{ orderId: string }> {
   const advance = await supabaseGetAdvanceOrder(payload.advanceOrderId);
   if (!advance) throw new Error('Advance order not found');
-  if (advance.status === 'COMPLETED') throw new Error('Advance order already finalized');
+  if (advance.status === 'COMPLETED' && advance.finalized_order_id) {
+    return { orderId: advance.finalized_order_id };
+  }
   if (advance.status === 'CANCELLED') throw new Error('Advance order was cancelled');
 
-  const cart: CartItem[] = advance.items.map((it) => ({
+  const cart: CartItem[] = (advance.items || []).map((it) => ({
     id: it.id,
     product_id: it.product_id,
     name: it.snapshot_name,
     desc: it.snapshot_desc || '',
-    price: Number(it.snapshot_price),
-    qty: it.quantity,
+    price: Number(it.snapshot_price) || 0,
+    qty: Number(it.quantity) || 1,
   }));
 
   // Pure single-source calculation logic
@@ -1549,95 +1552,57 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
     isGst: Boolean(payload.isGst),
     gstPercentage: Number(payload.gstPercentage) || 0,
     manualDiscount:
-      payload.discountAmount > 0
-        ? { type: payload.discountType, value: payload.discountValue }
+      Number(payload.discountAmount) > 0 || Number(payload.discountValue) > 0
+        ? {
+            type: payload.discountType || 'FIXED',
+            value: Number(payload.discountValue) || Number(payload.discountAmount) || 0,
+          }
         : null,
     deliveryFee: Number(payload.deliveryFee) || 0,
     advanceAmount: Number(advance.deposit_amount) || 0,
-    isCompleted: true,
   });
 
   // Official invoice number must start with INV-
-  let finalizedInvoiceId = payload.invoiceId;
+  let finalizedInvoiceId = String(payload.invoiceId || '').trim();
   if (!finalizedInvoiceId || !finalizedInvoiceId.startsWith('INV-')) {
     const yr = new Date().getFullYear();
     const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
     finalizedInvoiceId = `INV-${yr}-${rand}`;
   }
 
-  // 1. Update advance_orders row: mark COMPLETED, record final recognized revenue, and store link to official invoice
-  const advUpdatePayload: any = {
-    status: 'COMPLETED',
-    subtotal: calc.subtotal,
-    total_amount: calc.grandTotal,
-    deposit_amount: calc.grandTotal,
-    finalized_order_id: finalizedInvoiceId,
-    finalized_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
-    is_gst: calc.gstPercentage > 0,
-    gst_percentage: calc.gstPercentage,
-    gst_amount: calc.gstAmount,
-    discount_type: payload.discountType,
-    discount_value: payload.discountValue,
-    discount_amount: calc.discountAmount,
-  };
-
-  const { error: advErr } = await supabase
-    .from('advance_orders')
-    .update(advUpdatePayload)
-    .eq('id', payload.advanceOrderId);
-
-  if (advErr) {
-    console.error('Failed to update advance_orders row on finalize with full fields:', advErr);
-    await supabase
-      .from('advance_orders')
-      .update({
-        status: 'COMPLETED',
-        subtotal: calc.subtotal,
-        total_amount: calc.grandTotal,
-        deposit_amount: calc.grandTotal,
-        finalized_order_id: finalizedInvoiceId,
-        finalized_at: new Date().toISOString(),
-      })
-      .eq('id', payload.advanceOrderId);
-  }
-
-  // 2. Clean up any placeholder order previously created under DEP- ID
-  try {
-    await supabase.from('order_items').delete().eq('order_id', payload.advanceOrderId);
-    await supabase.from('orders').delete().eq('id', payload.advanceOrderId);
-  } catch (cleanErr) {
-    // Ignore cleanup error
-  }
-
-  // 3. Upsert official final invoice into orders table with id = finalizedInvoiceId (INV-...)
+  // 1. Prepare official invoice row with ONLY existing columns in Postgres orders schema
   const orderPayload: any = {
     id: finalizedInvoiceId,
-    customer_id: advance.customer_id,
+    customer_id: advance.customer_id || null,
     source: 'OFFLINE',
     status: 'COMPLETED',
-    is_gst: Boolean(payload.isGst),
+    is_gst: Boolean(calc.gstPercentage > 0),
     subtotal: calc.subtotal,
-    discount_type: payload.discountType,
-    discount_value: payload.discountValue,
+    discount_type: payload.discountType || 'FIXED',
+    discount_value: Number(payload.discountValue) || 0,
     discount_amount: calc.discountAmount,
     gst_percentage: calc.gstPercentage,
     gst_amount: calc.gstAmount,
     delivery_fee: calc.deliveryFee,
     grand_total: calc.grandTotal,
     cash_received: calc.grandTotal,
-    payment_mode: payload.paymentMode,
+    payment_mode: payload.paymentMode || 'CASH',
     bill_date: payload.billDate
       ? payload.billDate.split('T')[0]
       : new Date().toISOString().split('T')[0],
-    is_advance: true,
-    order_type: 'ADVANCE',
-    invoice_id: finalizedInvoiceId,
   };
 
-  await supabase.from('orders').upsert(orderPayload, { onConflict: 'id' });
+  // 2. Insert into orders table first
+  const { error: orderErr } = await supabase
+    .from('orders')
+    .upsert(orderPayload, { onConflict: 'id' });
 
-  // 4. Upsert order_items for finalizedInvoiceId
+  if (orderErr) {
+    console.error('[Supabase] Failed to create official invoice in orders table:', orderErr);
+    throw new Error(`Failed to create official invoice: ${orderErr.message}`);
+  }
+
+  // 3. Insert order_items for finalizedInvoiceId
   const itemsToInsert = cart.map((item) => ({
     id: uid(),
     order_id: finalizedInvoiceId,
@@ -1648,8 +1613,45 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
   }));
 
   if (itemsToInsert.length > 0) {
+    const { error: itemsErr } = await supabase
+      .from('order_items')
+      .insert(itemsToInsert);
+
+    if (itemsErr) {
+      console.error('[Supabase] Failed to create order items for invoice:', itemsErr);
+      // Atomic rollback: delete created invoice from orders
+      await supabase.from('orders').delete().eq('id', finalizedInvoiceId);
+      throw new Error(`Failed to create invoice items: ${itemsErr.message}`);
+    }
+  }
+
+  // 4. Update advance_orders row: mark COMPLETED, record final recognized revenue, and store link to official invoice
+  // ONLY use existing columns in advance_orders table (status, subtotal, total_amount, deposit_amount, finalized_order_id, finalized_at)
+  const advUpdatePayload: any = {
+    status: 'COMPLETED',
+    finalized_order_id: finalizedInvoiceId,
+    finalized_at: new Date().toISOString(),
+  };
+
+  const { error: advErr } = await supabase
+    .from('advance_orders')
+    .update(advUpdatePayload)
+    .eq('id', payload.advanceOrderId);
+
+  if (advErr) {
+    console.error('[Supabase] Failed to update advance_orders on finalize:', advErr);
+    // Atomic rollback: delete created order_items and orders invoice
     await supabase.from('order_items').delete().eq('order_id', finalizedInvoiceId);
-    await supabase.from('order_items').insert(itemsToInsert);
+    await supabase.from('orders').delete().eq('id', finalizedInvoiceId);
+    throw new Error(`Failed to update advance order: ${advErr.message}`);
+  }
+
+  // 5. Clean up any placeholder order previously created under DEP- ID if any
+  try {
+    await supabase.from('order_items').delete().eq('order_id', payload.advanceOrderId);
+    await supabase.from('orders').delete().eq('id', payload.advanceOrderId);
+  } catch (cleanErr) {
+    // Ignore cleanup error
   }
 
   return { orderId: finalizedInvoiceId };

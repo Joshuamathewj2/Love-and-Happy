@@ -169,7 +169,7 @@ export default function AdminOrdersPage() {
             gst_amount: 0,
             delivery_fee: 0,
             grand_total: Number(a.total_amount ?? a.deposit_amount ?? 0),
-            cash_received: Number(a.total_amount ?? a.deposit_amount ?? 0),
+            cash_received: Number(a.deposit_amount) || 0,
             payment_mode: a.deposit_payment_mode || "CASH",
             bill_date: a.finalized_at
               ? a.finalized_at.split("T")[0]

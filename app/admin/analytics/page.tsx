@@ -99,23 +99,26 @@ export default function AdminAnalyticsPage() {
           .ilike("status", "COMPLETED");
 
         if (advData && advData.length > 0) {
-          compAdvRecords = advData.map((a: any) => {
-            const tot = Number(a.total_amount ?? a.deposit_amount ?? 0);
-            return {
-              id: a.id,
-              grand_total: tot,
-              total: tot,
-              subtotal: Number(a.subtotal) || tot,
-              gst_amount: 0,
-              is_gst: false,
-              delivery_fee: 0,
-              created_at: a.finalized_at || a.created_at || new Date().toISOString(),
-              status: "COMPLETED",
-              is_advance: true,
-              payment_mode: a.deposit_payment_mode || "CASH",
-              source: "OFFLINE",
-            };
-          });
+          compAdvRecords = advData
+            .filter((a: any) => a.finalized_order_id && String(a.finalized_order_id).startsWith("INV-"))
+            .map((a: any) => {
+              const tot = Number(a.total_amount ?? a.deposit_amount ?? 0);
+              const invId = String(a.finalized_order_id);
+              return {
+                id: invId,
+                grand_total: tot,
+                total: tot,
+                subtotal: Number(a.subtotal) || tot,
+                gst_amount: 0,
+                is_gst: false,
+                delivery_fee: 0,
+                created_at: a.finalized_at || a.created_at || new Date().toISOString(),
+                status: "COMPLETED",
+                is_advance: true,
+                payment_mode: a.deposit_payment_mode || "CASH",
+                source: "OFFLINE",
+              };
+            });
         }
       } catch (advErr) {
         console.warn("Analytics advance orders fetch notice:", advErr);
@@ -146,7 +149,10 @@ export default function AdminAnalyticsPage() {
       }
 
       // 4. Strictly isolate: exclude all unfulfilled deposits and incomplete advance orders
-      const validCompletedSales = Array.from(combinedMap.values()).filter(isCompletedSale);
+      // Analytics must ONLY include official invoices (starting with "INV-").
+      const validCompletedSales = Array.from(combinedMap.values()).filter(
+        (s) => isCompletedSale(s) && String(s.id || "").toUpperCase().startsWith("INV-")
+      );
       setSalesData(validCompletedSales);
     } catch (err) {
       console.error("[Analytics] Error loading sales data:", err);
