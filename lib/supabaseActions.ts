@@ -1529,6 +1529,7 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
   deliveryFee: number;
   paymentMode: PaymentMode;
   billDate: string;
+  taxMode?: 'exclusive' | 'inclusive';
 }): Promise<{ orderId: string }> {
   const advance = await supabaseGetAdvanceOrder(payload.advanceOrderId);
   if (!advance) throw new Error('Advance order not found');
@@ -1546,11 +1547,19 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
     qty: Number(it.quantity) || 1,
   }));
 
+  const orderTaxMode =
+    payload.taxMode ||
+    (advance as any).tax_mode ||
+    (Number(advance.total_amount) > Number(advance.subtotal) + (Number((advance as any).delivery_fee) || 0)
+      ? 'exclusive'
+      : 'inclusive');
+
   // Pure single-source calculation logic
   const calc = calculateAdvanceOrderTotals({
     items: cart.map((i) => ({ price: i.price, qty: i.qty })),
     isGst: Boolean(payload.isGst),
     gstPercentage: Number(payload.gstPercentage) || 0,
+    taxMode: orderTaxMode,
     manualDiscount:
       Number(payload.discountAmount) > 0 || Number(payload.discountValue) > 0
         ? {

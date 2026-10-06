@@ -8,6 +8,7 @@ import { fetchAdvanceOrders, removeAdvanceOrder, setAdvanceOrderStatus, finalize
 import { AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
 import { calculateAdvanceOrderTotals } from "@/lib/advanceOrderCalculations";
 import { supabase } from "@/lib/supabaseClient";
+import { ReceiveRemainingPaymentModal } from "./ReceiveRemainingPaymentModal";
 
 export const dynamic = "force-dynamic";
 
@@ -22,15 +23,6 @@ export default function AdminAdvanceOrdersPage() {
 
   // ── Receive Remaining Payment modal state ──
   const [receiveModalOrder, setReceiveModalOrder] = useState<AdvanceOrderWithRelations | null>(null);
-  const [receiveDiscountType, setReceiveDiscountType] = useState<"FIXED" | "PERCENT">("FIXED");
-  const [receiveDiscountValue, setReceiveDiscountValue] = useState<number | "">("");
-  const [receivePaymentMode, setReceivePaymentMode] = useState<"CASH" | "GPAY" | "SPLIT">("CASH");
-  const [receivePaymentNotes, setReceivePaymentNotes] = useState<string>("");
-  const [receiveCouponCode, setReceiveCouponCode] = useState<string>("");
-  const [appliedCoupon, setAppliedCoupon] = useState<{ code: string; type: "fixed" | "percent"; value: number } | null>(null);
-  const [couponError, setCouponError] = useState<string | null>(null);
-  const [isFinalizing, setIsFinalizing] = useState(false);
-  const isFinalizingLock = useRef(false);
 
   const loadData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setIsRefreshing(true);
@@ -217,22 +209,12 @@ export default function AdminAdvanceOrdersPage() {
 
   const openReceiveModal = (adv: AdvanceOrderWithRelations) => {
     setReceiveModalOrder(adv);
-    setReceiveDiscountType("FIXED");
-    setReceiveDiscountValue("");
-    setReceivePaymentMode("CASH");
-    setReceivePaymentNotes("");
-    setReceiveCouponCode("");
-    setAppliedCoupon(null);
-    setCouponError(null);
     // Reset state so select stays on previous status
     setAdvanceOrders((prev) => [...prev]);
   };
 
   const closeReceiveModal = () => {
     setReceiveModalOrder(null);
-    setReceiveCouponCode("");
-    setAppliedCoupon(null);
-    setCouponError(null);
     // Force re-render so status selects snap back to saved status
     setAdvanceOrders((prev) => [...prev]);
   };
@@ -673,13 +655,14 @@ export default function AdminAdvanceOrdersPage() {
 
                           {/* Collect Payment */}
                           {statusUpper !== "COMPLETED" && statusUpper !== "CANCELLED" && (
-                            <Link
-                              href="/pos/admin/secure/control-panel/love-and-happy"
+                            <button
+                              type="button"
+                              onClick={() => openReceiveModal(a)}
                               title="Collect Payment"
-                              className="flex items-center justify-center w-7 h-7 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-md transition-colors shrink-0"
+                              className="flex items-center justify-center w-7 h-7 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-md transition-colors shrink-0 cursor-pointer"
                             >
                               <IndianRupee className="w-3.5 h-3.5" />
-                            </Link>
+                            </button>
                           )}
 
                           {/* Delete */}
@@ -702,251 +685,17 @@ export default function AdminAdvanceOrdersPage() {
       </div>
 
       {/* ── Receive Remaining Payment Modal ───────────────────────────── */}
-      {receiveModalOrder && (() => {
-        const baseTotals = getAdvanceTotals(receiveModalOrder);
-        const settlementCalc = calculateAdvanceOrderTotals({
-          items: (receiveModalOrder.items || []).map((it) => ({
-            price: Number(it.snapshot_price) || 0,
-            qty: Number(it.quantity) || 1,
-          })),
-          subtotal: baseTotals.subtotal,
-          isGst: (receiveModalOrder as any).is_gst !== undefined ? Boolean((receiveModalOrder as any).is_gst) : undefined,
-          gstPercentage: (receiveModalOrder as any).gst_percentage !== undefined ? Number((receiveModalOrder as any).gst_percentage) : undefined,
-          taxMode: (receiveModalOrder as any).tax_mode || "exclusive",
-          deliveryFee: Number((receiveModalOrder as any).delivery_fee) || 0,
-          couponDiscount: appliedCoupon ? { type: appliedCoupon.type, value: appliedCoupon.value } : null,
-          manualDiscount:
-            receiveDiscountValue !== "" && Number(receiveDiscountValue) > 0
-              ? { type: receiveDiscountType, value: Number(receiveDiscountValue) }
-              : null,
-          advanceAmount: Number(receiveModalOrder.deposit_amount) || 0,
-        });
-
-        const confirmReceiveBalance = async () => {
-          if (!receiveModalOrder || isFinalizingLock.current || isFinalizing) return;
-          if (!settlementCalc.isValid) {
-            alert(settlementCalc.errorMessage || "Discount is too high.");
-            return;
-          }
-          isFinalizingLock.current = true;
-          setIsFinalizing(true);
-          try {
-            const yr = new Date().getFullYear();
-            const rand = Math.random().toString(36).substr(2, 5).toUpperCase();
-            const invoiceId = `INV-${yr}-${rand}`;
-
-            // Open WhatsApp directly in click handler to avoid popup blockers
-            const cleanPhone = (receiveModalOrder.customer_phone || "").replace(/\D/g, "").slice(-10);
-            let waUrl = "";
-            if (cleanPhone && cleanPhone.length === 10) {
-              const shopEmoji = String.fromCodePoint(0x2728);
-              const checkEmoji = String.fromCodePoint(0x2705);
-              let msg = `${shopEmoji} *Love & Happy Unisex Salon* ${shopEmoji}\n\n`;
-              msg += `${checkEmoji} *Payment Received & Order Completed!*\n\n`;
-              msg += `Customer: ${receiveModalOrder.customer_name || "Valued Customer"}\n`;
-              msg += `Deposit ID: ${receiveModalOrder.id}\n`;
-              msg += `Official Invoice: ${invoiceId}\n`;
-              msg += `Amount Paid Now: ₹${settlementCalc.remainingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n`;
-              msg += `Payment Method: ${receivePaymentMode === "GPAY" ? "UPI / GPay" : receivePaymentMode}\n`;
-              msg += `Total Bill: ₹${settlementCalc.grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n`;
-              msg += `Balance Due: ₹0.00\n\n`;
-              msg += `Thank you for choosing Love & Happy Unisex Salon. We look forward to serving you again!`;
-              waUrl = `https://api.whatsapp.com/send?phone=91${cleanPhone}&text=${encodeURIComponent(msg)}`;
-            }
-            if (waUrl) window.open(waUrl, "_blank");
-
-            await finalizeAdvanceOrder({
-              advanceOrderId: receiveModalOrder.id,
-              invoiceId,
-              isGst: settlementCalc.gstPercentage > 0,
-              gstPercentage: settlementCalc.gstPercentage,
-              discountType: receiveDiscountType,
-              discountValue: Number(receiveDiscountValue) || 0,
-              discountAmount: settlementCalc.discountAmount,
-              deliveryFee: 0,
-              paymentMode: receivePaymentMode,
-              billDate: new Date().toISOString(),
-            });
-
+      {receiveModalOrder && (
+        <ReceiveRemainingPaymentModal
+          order={receiveModalOrder}
+          onClose={closeReceiveModal}
+          onSuccess={async () => {
             closeReceiveModal();
             await loadData(true);
             router.refresh();
-
-            if (!waUrl) {
-              alert(`Payment confirmed! Official Invoice: ${invoiceId}. (No customer phone for WhatsApp).`);
-            }
-          } catch (err: any) {
-            console.error("Finalize advance order error:", err);
-            alert(`Could not finalize the advance order: ${err?.message || "Please try again."}`);
-          } finally {
-            isFinalizingLock.current = false;
-            setIsFinalizing(false);
-          }
-        };
-
-        return (
-          <div
-            className="fixed inset-0 z-[500] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/60 backdrop-blur-sm"
-            onClick={(e) => { if (e.target === e.currentTarget) closeReceiveModal(); }}
-          >
-            <div className="bg-white rounded-t-2xl sm:rounded-2xl shadow-2xl w-full sm:max-w-md p-5 sm:p-6 max-h-[90vh] overflow-y-auto border-t-4 border-emerald-500">
-              <div className="space-y-4">
-                {/* Header */}
-                <div className="flex justify-between items-start">
-                  <div>
-                    <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200">
-                      {receiveModalOrder.id}
-                    </span>
-                    <h3 className="text-lg font-black text-gray-900 tracking-tight mt-1">Receive Remaining Payment</h3>
-                    <p className="text-xs text-gray-500">
-                      {receiveModalOrder.customer_name || "Customer"} • {receiveModalOrder.customer_phone || "No phone"}
-                    </p>
-                  </div>
-                  <button
-                    onClick={closeReceiveModal}
-                    className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                {/* Remaining Amount card */}
-                <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
-                  <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">REMAINING AMOUNT</p>
-                  <p className="text-3xl font-black text-emerald-700 mt-0.5">
-                    ₹{settlementCalc.remainingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                  </p>
-                  <div className="flex justify-center gap-4 mt-2 text-[11px] text-emerald-900/80 font-medium border-t border-emerald-200/60 pt-2">
-                    <span>Order Total: ₹{settlementCalc.grandTotal.toFixed(2)}</span>
-                    <span>•</span>
-                    <span>Already Paid: ₹{settlementCalc.advancePaid.toFixed(2)}</span>
-                  </div>
-                </div>
-
-                {/* Coupon Code */}
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Coupon Code (Optional)</label>
-                  <div className="flex gap-2">
-                    <input
-                      type="text"
-                      value={receiveCouponCode}
-                      onChange={(e) => { setReceiveCouponCode(e.target.value.toUpperCase()); setCouponError(null); }}
-                      placeholder="e.g. WELCOME10"
-                      className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 uppercase focus:outline-none"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const code = receiveCouponCode.trim().toUpperCase();
-                        if (!code) { setAppliedCoupon(null); setCouponError(null); return; }
-                        // Simple validation: if code is non-empty treat as free-text coupon
-                        // (no coupon DB in admin page; reject unknown codes)
-                        setCouponError("Coupon validation is available on the POS page.");
-                      }}
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
-                    >
-                      Apply
-                    </button>
-                  </div>
-                  {appliedCoupon && (
-                    <div className="mt-1.5 flex items-center justify-between text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
-                      <span className="font-bold">✓ {appliedCoupon.code} (-₹{settlementCalc.couponDiscountAmount.toFixed(2)})</span>
-                      <button type="button" onClick={() => { setAppliedCoupon(null); setReceiveCouponCode(""); }} className="text-xs text-rose-600 hover:underline font-bold cursor-pointer">Remove</button>
-                    </div>
-                  )}
-                  {couponError && <p className="mt-1 text-[11px] font-semibold text-rose-600">{couponError}</p>}
-                </div>
-
-                {/* Manual Discount */}
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Manual Discount</label>
-                  <div className="flex gap-2">
-                    <select
-                      value={receiveDiscountType}
-                      onChange={(e) => setReceiveDiscountType(e.target.value as "FIXED" | "PERCENT")}
-                      className="bg-white border border-gray-300 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none focus:border-emerald-500"
-                    >
-                      <option value="FIXED">₹</option>
-                      <option value="PERCENT">%</option>
-                    </select>
-                    <input
-                      type="number"
-                      min="0"
-                      value={receiveDiscountValue}
-                      onChange={(e) => setReceiveDiscountValue(e.target.value === "" ? "" : parseFloat(e.target.value))}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      placeholder="Discount amount"
-                      className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none"
-                    />
-                  </div>
-                  {settlementCalc.manualDiscountAmount > 0 && (
-                    <p className="mt-1 text-[11px] text-gray-500 font-medium">Manual discount: -₹{settlementCalc.manualDiscountAmount.toFixed(2)}</p>
-                  )}
-                </div>
-
-                {/* Payment Method */}
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Payment Method</label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {(["CASH", "GPAY", "SPLIT"] as const).map((mode) => (
-                      <button
-                        key={mode}
-                        type="button"
-                        onClick={() => setReceivePaymentMode(mode)}
-                        className={`py-2 px-1 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
-                          receivePaymentMode === mode
-                            ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
-                            : "bg-white text-gray-700 border-gray-200 hover:border-emerald-500"
-                        }`}
-                      >
-                        {mode === "GPAY" ? "UPI / GPay" : mode === "CASH" ? "Cash" : "Card / Split"}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Payment Notes */}
-                <div>
-                  <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">Payment Notes (Optional)</label>
-                  <textarea
-                    value={receivePaymentNotes}
-                    onChange={(e) => setReceivePaymentNotes(e.target.value)}
-                    placeholder="e.g. Settle remaining via UPI..."
-                    className="w-full bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none min-h-[60px] resize-none"
-                  />
-                </div>
-
-                {/* Info box */}
-                <div className="bg-amber-50 border border-amber-300/80 rounded-xl p-3 text-[11px] text-amber-900 font-medium">
-                  Confirmation marks the order Completed, creates one official invoice, and recognizes the full ₹{settlementCalc.grandTotal.toFixed(2)} as revenue.
-                </div>
-
-                {/* Validation error */}
-                {!settlementCalc.isValid && (
-                  <div className="bg-rose-50 border border-rose-300 rounded-xl p-2.5 text-xs text-rose-700 font-bold">
-                    {settlementCalc.errorMessage || "Discount cannot reduce the total below the amount already paid."}
-                  </div>
-                )}
-
-                {/* Confirm button */}
-                <button
-                  onClick={confirmReceiveBalance}
-                  disabled={isFinalizing || !settlementCalc.isValid}
-                  className={`w-full py-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md transition-all ${
-                    isFinalizing || !settlementCalc.isValid ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                  }`}
-                >
-                  {isFinalizing ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /><span>Finalizing...</span></>
-                  ) : (
-                    <><Check className="w-4 h-4" /><span>Confirm Final Payment</span></>
-                  )}
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      })()}
+          }}
+        />
+      )}
     </div>
   );
 }

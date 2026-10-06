@@ -236,6 +236,7 @@ export async function finalizeAdvanceOrder(payload: {
   deliveryFee: number;
   paymentMode: PaymentMode;
   billDate: string;
+  taxMode?: 'exclusive' | 'inclusive';
 }): Promise<{ success: boolean; orderId?: string; error?: string }> {
   try {
     const result = await dbStore.finalizeAdvanceOrder(payload);

@@ -266,4 +266,62 @@ test("Same output for the same order across all statuses (Order Total 1770, Paid
   }
 });
 
+test("GST Inclusive Mode reconciles: TaxableValue + CGST + SGST === GrossAmount (18% on 8000)", () => {
+  const res = calculateAdvanceOrderTotals({
+    subtotal: 8000,
+    isGst: true,
+    gstPercentage: 18,
+    taxMode: "inclusive",
+    advanceAmount: 2000,
+  });
+
+  assert.equal(res.subtotal, 8000);
+  assert.equal(res.grandTotal, 8000);
+  assert.equal(res.taxableAmount, 6779.66);
+  assert.equal(res.gstAmount, 1220.34);
+  assert.equal(res.cgstAmount, 610.17);
+  assert.equal(res.sgstAmount, 610.17);
+  assert.equal(Number((res.taxableAmount + res.cgstAmount + res.sgstAmount).toFixed(2)), 8000.00);
+  assert.equal(res.advancePaid, 2000);
+  assert.equal(res.remainingBalance, 6000);
+});
+
+test("GST Inclusive Mode reconciles: TaxableValue + CGST + SGST === GrossAmount (5% on 8000)", () => {
+  const res = calculateAdvanceOrderTotals({
+    subtotal: 8000,
+    isGst: true,
+    gstPercentage: 5,
+    taxMode: "inclusive",
+    advanceAmount: 2000,
+  });
+
+  assert.equal(res.subtotal, 8000);
+  assert.equal(res.grandTotal, 8000);
+  assert.equal(res.taxableAmount, 7619.05);
+  assert.equal(res.gstAmount, 380.95);
+  assert.equal(res.cgstAmount, 190.48);
+  assert.equal(res.sgstAmount, 190.47);
+  assert.equal(Number((res.taxableAmount + res.cgstAmount + res.sgstAmount).toFixed(2)), 8000.00);
+  assert.equal(res.remainingBalance, 6000);
+});
+
+test("GST Exclusive Mode reconciles: TaxableValue + CGST + SGST === GrossAmount (18% on 8000)", () => {
+  const res = calculateAdvanceOrderTotals({
+    subtotal: 8000,
+    isGst: true,
+    gstPercentage: 18,
+    taxMode: "exclusive",
+    advanceAmount: 2000,
+  });
+
+  assert.equal(res.subtotal, 8000);
+  assert.equal(res.taxableAmount, 8000.00);
+  assert.equal(res.gstAmount, 1440.00);
+  assert.equal(res.cgstAmount, 720.00);
+  assert.equal(res.sgstAmount, 720.00);
+  assert.equal(res.grandTotal, 9440.00);
+  assert.equal(Number((res.taxableAmount + res.cgstAmount + res.sgstAmount).toFixed(2)), 9440.00);
+  assert.equal(res.remainingBalance, 7440);
+});
+
 

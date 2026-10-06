@@ -246,6 +246,7 @@ export const dbStore = {
     deliveryFee: number;
     paymentMode: PaymentMode;
     billDate: string;
+    taxMode?: 'exclusive' | 'inclusive';
   }): Promise<{ orderId: string }> {
     return await supabaseFinalizeAdvanceOrder(payload);
   },

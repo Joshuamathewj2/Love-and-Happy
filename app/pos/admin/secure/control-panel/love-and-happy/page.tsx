@@ -80,6 +80,7 @@ import { Product, Expense, Category, AdvanceOrderWithRelations, AdvanceOrderStat
 import { LOVE_AND_HAPPY_CATEGORIES, LOVE_AND_HAPPY_CATALOG_ITEMS } from "@/lib/catalogData";
 import { calculateAdvanceOrderTotals } from "@/lib/advanceOrderCalculations";
 import { INVOICE_TERMS_AND_NOTES } from "@/lib/constants";
+import { ReceiveRemainingPaymentModal } from "@/components/admin/ReceiveRemainingPaymentModal";
 
 // Preset expense categories (users can also type a custom one)
 const EXPENSE_CATEGORIES = [
@@ -1478,16 +1479,8 @@ export default function POSBilling() {
         return;
       }
 
-      if (waUrl) {
-        window.open(waUrl, "_blank");
-      }
-
       closeAdvanceDialog();
       await fetchData();
-
-      if (!waUrl) {
-        alert(`Payment confirmed! Official Invoice: ${invoiceId}. (No customer phone number for WhatsApp message).`);
-      }
     } catch (err: any) {
       console.error("SUPABASE FINALIZE ADVANCE ORDER ERROR:", err);
       alert("Could not complete the order, please try again");
@@ -4671,214 +4664,26 @@ export default function POSBilling() {
         )}
 
         {/* ── Advance Order VIEW / RECEIVE-BALANCE dialog ────────── */}
-        {selectedAdvance && advanceViewMode && (
+        {selectedAdvance && advanceViewMode === "receive" && (
+          <ReceiveRemainingPaymentModal
+            order={selectedAdvance}
+            onClose={closeAdvanceDialog}
+            onSuccess={async () => {
+              closeAdvanceDialog();
+              await fetchData();
+              router.refresh();
+            }}
+          />
+        )}
+
+        {selectedAdvance && advanceViewMode === "view" && (
           <div className="fixed inset-0 z-[400] flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-5 sm:p-6 max-h-[90vh] overflow-y-auto animate-in zoom-in-95 duration-200 border-t-4 border-emerald-500">
-              {advanceViewMode === "receive" ? (
-                <div className="space-y-4">
-                  {/* 1. Small green deposit ID label at top, title "Receive Remaining Payment", close X top-right */}
-                  <div className="flex justify-between items-start">
-                    <div>
-                      <span className="inline-block px-2.5 py-0.5 rounded text-[11px] font-mono font-bold text-emerald-800 bg-emerald-50 border border-emerald-200">
-                        {selectedAdvance.id}
-                      </span>
-                      <h3 className="text-lg font-black text-gray-900 tracking-tight mt-1">
-                        Receive Remaining Payment
-                      </h3>
-                      <p className="text-xs text-gray-500">
-                        {selectedAdvance.customer_name || "Customer"} • {selectedAdvance.customer_phone || "No phone"}
-                      </p>
-                    </div>
-                    <button
-                      onClick={closeAdvanceDialog}
-                      className="text-gray-400 hover:text-gray-700 hover:bg-gray-100 w-8 h-8 rounded-lg flex items-center justify-center transition-colors cursor-pointer"
-                    >
-                      <X className="w-5 h-5" />
-                    </button>
-                  </div>
-
-                  {/* 2. Light-green card: REMAINING AMOUNT label with large bold amount */}
-                  <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-center">
-                    <p className="text-[10px] font-bold uppercase tracking-wider text-emerald-800">
-                      REMAINING AMOUNT
-                    </p>
-                    <p className="text-3xl font-black text-emerald-700 mt-0.5">
-                      ₹{settlementCalc.remainingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </p>
-                    <div className="flex justify-center gap-4 mt-2 text-[11px] text-emerald-900/80 font-medium border-t border-emerald-200/60 pt-2">
-                      <span>Order Total: ₹{settlementCalc.grandTotal.toFixed(2)}</span>
-                      <span>•</span>
-                      <span>Already Paid: ₹{settlementCalc.totalPaid.toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  {/* 3. COUPON CODE (OPTIONAL) input with green Apply button */}
+              {/* Regular advance order view mode */}
+              <div>
+                <div className="flex justify-between items-center pb-3 border-b border-black/10">
                   <div>
-                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                      Coupon Code (Optional)
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={receiveCouponCode}
-                        onChange={(e) => {
-                          setReceiveCouponCode(e.target.value.toUpperCase());
-                          setCouponError(null);
-                        }}
-                        placeholder="e.g. WELCOME10, SUPERPOS"
-                        className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 uppercase focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const code = receiveCouponCode.trim().toUpperCase();
-                          if (!code) {
-                            setAppliedCoupon(null);
-                            setCouponError(null);
-                            return;
-                          }
-                          const found = coupons.find((c) => c.code.toUpperCase() === code && c.code !== "none");
-                          if (found) {
-                            setAppliedCoupon({ code: found.code, type: found.type as any, value: found.value });
-                            setCouponError(null);
-                          } else {
-                            setAppliedCoupon(null);
-                            setCouponError("Invalid coupon code: " + code);
-                          }
-                        }}
-                        className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-xl text-xs font-bold uppercase tracking-wider transition-colors cursor-pointer"
-                      >
-                        Apply
-                      </button>
-                    </div>
-                    {appliedCoupon && (
-                      <div className="mt-1.5 flex items-center justify-between text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-lg">
-                        <span className="font-bold">
-                          ✓ Coupon applied: {appliedCoupon.code} (-₹{settlementCalc.couponDiscountAmount.toFixed(2)})
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAppliedCoupon(null);
-                            setReceiveCouponCode("");
-                          }}
-                          className="text-xs text-rose-600 hover:underline font-bold cursor-pointer"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    )}
-                    {couponError && (
-                      <p className="mt-1 text-[11px] font-semibold text-rose-600">{couponError}</p>
-                    )}
-                  </div>
-
-                  {/* 4. MANUAL DISCOUNT with currency/percent type dropdown (₹ / %) plus numeric input */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                      Manual Discount
-                    </label>
-                    <div className="flex gap-2">
-                      <select
-                        value={receiveDiscountType}
-                        onChange={(e) => setReceiveDiscountType(e.target.value as "FIXED" | "PERCENT")}
-                        className="bg-white border border-gray-300 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none focus:border-emerald-500"
-                      >
-                        <option value="FIXED">₹</option>
-                        <option value="PERCENT">%</option>
-                      </select>
-                      <input
-                        type="number"
-                        min="0"
-                        value={receiveDiscountValue}
-                        onChange={(e) => setReceiveDiscountValue(e.target.value === "" ? "" : parseFloat(e.target.value))}
-                        onWheel={(e) => e.currentTarget.blur()}
-                        placeholder="Discount amount"
-                        className="flex-1 bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs font-bold text-gray-900 focus:outline-none"
-                      />
-                    </div>
-                    {settlementCalc.manualDiscountAmount > 0 && (
-                      <p className="mt-1 text-[11px] text-gray-500 font-medium">
-                        Manual discount applied: -₹{settlementCalc.manualDiscountAmount.toFixed(2)}
-                      </p>
-                    )}
-                  </div>
-
-                  {/* 5. PAYMENT METHOD dropdown / buttons */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                      Payment Method
-                    </label>
-                    <div className="grid grid-cols-3 gap-2">
-                      {(["CASH", "GPAY", "SPLIT"] as const).map((mode) => (
-                        <button
-                          key={mode}
-                          type="button"
-                          onClick={() => setReceivePaymentMode(mode)}
-                          className={`py-2 px-1 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
-                            receivePaymentMode === mode
-                              ? "bg-emerald-600 text-white border-emerald-600 shadow-sm"
-                              : "bg-white text-gray-700 border-gray-200 hover:border-emerald-500"
-                          }`}
-                        >
-                          {mode === "GPAY" ? "UPI / GPay" : mode === "CASH" ? "Cash" : "Card / Split"}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* 6. PAYMENT NOTES optional textarea */}
-                  <div>
-                    <label className="block text-[10px] font-bold text-gray-700 uppercase tracking-wider mb-1.5">
-                      Payment Notes (Optional)
-                    </label>
-                    <textarea
-                      value={receivePaymentNotes}
-                      onChange={(e) => setReceivePaymentNotes(e.target.value)}
-                      placeholder="e.g. Settle remaining via UPI..."
-                      className="w-full bg-white border border-gray-300 focus:border-emerald-500 rounded-xl px-3 py-2 text-xs text-gray-900 focus:outline-none min-h-[60px] resize-none"
-                    />
-                  </div>
-
-                  {/* 7. Yellow info box */}
-                  <div className="bg-amber-50 border border-amber-300/80 rounded-xl p-3 text-[11px] text-amber-900 font-medium">
-                    Confirmation marks the order Completed, creates one official invoice, and recognizes the full ₹{settlementCalc.grandTotal.toFixed(2)} as revenue.
-                  </div>
-
-                  {/* Validation error if discount causes negative remaining */}
-                  {!settlementCalc.isValid && (
-                    <div className="bg-rose-50 border border-rose-300 rounded-xl p-2.5 text-xs text-rose-700 font-bold">
-                      {settlementCalc.errorMessage || "Discount cannot reduce the total below the amount already paid."}
-                    </div>
-                  )}
-
-                  {/* 8. Full-width green Confirm Final Payment button */}
-                  <button
-                    onClick={confirmReceiveBalance}
-                    disabled={isFinalizing || !settlementCalc.isValid}
-                    className={`w-full py-3 rounded-xl font-black text-xs uppercase tracking-wider flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white shadow-md transition-all ${
-                      isFinalizing || !settlementCalc.isValid ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-                    }`}
-                  >
-                    {isFinalizing ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        <span>Finalizing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Check className="w-4 h-4" />
-                        <span>Confirm Final Payment</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              ) : (
-                /* Regular advance order view mode */
-                <div>
-                  <div className="flex justify-between items-center pb-3 border-b border-black/10">
-                    <div>
-                      <p className="text-[11px] font-mono font-bold text-[#0097A7]">{selectedAdvance.id}</p>
+                    <p className="text-[11px] font-mono font-bold text-[#0097A7]">{selectedAdvance.id}</p>
                       <h3 className="text-lg font-black text-[#000000] tracking-tight">
                         Advance Order Details
                       </h3>
@@ -4969,9 +4774,8 @@ export default function POSBilling() {
                     </div>
                   </div>
                 </div>
-              )}
+              </div>
             </div>
-          </div>
         )}
 
         {/* ── Advance Orders tab ─────────────────────────────────── */}
