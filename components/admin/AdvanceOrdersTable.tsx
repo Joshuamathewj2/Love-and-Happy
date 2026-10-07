@@ -55,6 +55,7 @@ export function AdvanceOrdersTable({
                 isGst: order.is_gst !== undefined ? Boolean(order.is_gst) : undefined,
                 gstPercentage: order.gst_percentage !== undefined ? Number(order.gst_percentage) : undefined,
                 taxMode: order.tax_mode || "exclusive",
+                isCompleted: order.status === "COMPLETED",
                 manualDiscount:
                   Number(order.discount_amount) > 0 || Number(order.discount_value) > 0
                     ? {
@@ -169,8 +170,8 @@ export function AdvanceOrdersTable({
 
                       {/* Invoice */}
                       <Link
-                        href={`/advance/${order.id}`}
-                        title="Print / View Invoice"
+                        href={`/invoice/${order.finalized_order_id || order.id}`}
+                        title="View Invoice"
                         className="flex items-center justify-center w-7 h-7 bg-cyan-50 hover:bg-cyan-100 text-cyan-600 rounded-md transition-colors cursor-pointer shrink-0"
                       >
                         <FileText className="w-3.5 h-3.5" />

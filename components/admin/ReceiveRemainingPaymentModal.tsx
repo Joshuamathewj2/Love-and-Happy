@@ -10,7 +10,7 @@ import { supabase } from "@/lib/supabaseClient";
 export interface ReceiveRemainingPaymentModalProps {
   order: AdvanceOrderWithRelations;
   onClose: () => void;
-  onSuccess: () => Promise<void> | void;
+  onSuccess: (finalizedOrder?: any) => Promise<void> | void;
 }
 
 export function ReceiveRemainingPaymentModal({
@@ -142,9 +142,53 @@ export function ReceiveRemainingPaymentModal({
         console.warn("Notice: advance_orders status direct sync returned:", advErr.message);
       }
 
-      // STRICT LOGIC: Do NOT open WhatsApp or trigger window.open(wa.me/...)
-      // Immediately notify parent to close modal, refetch orders, and refresh router
-      await onSuccess();
+      const officialOrderId = res.orderId || invoiceId;
+      const finalizedOrder = {
+        id: officialOrderId,
+        customerName: order.customer_name || "Valued Customer",
+        customerPhone: order.customer_phone || "",
+        customerAddress: order.customer_address || null,
+        source: "OFFLINE",
+        isGst: Boolean(order.is_gst),
+        items: (order.items && order.items.length > 0)
+          ? order.items.map((it, idx) => ({
+              id: it.id || `oi-${officialOrderId}-${idx}`,
+              name: it.snapshot_name || "Advance Item",
+              desc: it.snapshot_desc || "",
+              price: Number(it.snapshot_price) || 0,
+              qty: Number(it.quantity) || 1,
+            }))
+          : [
+              {
+                id: `oi-${officialOrderId}-0`,
+                name: "Advance Order Item",
+                desc: "",
+                price: Number(baseTotals.subtotal) || Number(liveTotals.subtotal) || 0,
+                qty: 1,
+              },
+            ],
+        subtotal: Number(liveTotals.subtotal) || 0,
+        discount: Number(calculatedDiscount) || 0,
+        discountType: discountType,
+        discountValue: Number(safeDiscount) || 0,
+        gstPercentage: Boolean(order.is_gst) ? numericGstRate : 0,
+        gstAmount: Number(liveTotals.gstAmount) || 0,
+        deliveryFee: Number(liveTotals.deliveryFee) || 0,
+        grandTotal: Number(liveTotals.grandTotal) || 0,
+        cashReceived: Number(finalAmountToCollect) || 0,
+        splitCash: 0,
+        splitGpay: 0,
+        paymentMode: paymentMode,
+        date: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+        status: "Completed",
+        isAdvance: true,
+        depositId: order.id,
+        advancePaidEarlier: Number(advancePaid) || 0,
+      };
+
+      // Notify parent to close modal, show Bill Generated popup, and refresh orders
+      await onSuccess(finalizedOrder);
     } catch (err: any) {
       console.error("Payment confirmation error:", err);
       alert(`Could not finalize the advance order: ${err?.message || "Please check your network and try again."}`);

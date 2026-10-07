@@ -1348,6 +1348,7 @@ export default function POSBilling() {
       isGst: adv.is_gst !== undefined ? Boolean(adv.is_gst) : undefined,
       gstPercentage: adv.gst_percentage !== undefined ? Number(adv.gst_percentage) : undefined,
       taxMode: adv.tax_mode || "exclusive",
+      isCompleted: adv.status === "COMPLETED",
       manualDiscount:
         Number(adv.discount_amount) > 0 || Number(adv.discount_value) > 0
           ? {
@@ -3429,6 +3430,20 @@ export default function POSBilling() {
                   </span>
                 </div>
 
+                {Number((completedBillData as any).advancePaidEarlier) > 0 && (
+                  <div className="flex justify-between items-center text-xs">
+                    <span className="font-semibold text-gray-600">
+                      Advance Paid (earlier)
+                    </span>
+                    <span className="text-sm font-bold text-black">
+                      ₹
+                      {Number((completedBillData as any).advancePaidEarlier).toLocaleString(undefined, {
+                        minimumFractionDigits: 2,
+                      })}
+                    </span>
+                  </div>
+                )}
+
                 {completedBillData.paymentMode === "SPLIT" && (
                   <>
                     <div className="flex justify-between items-center text-xs">
@@ -3457,17 +3472,19 @@ export default function POSBilling() {
                 )}
 
                 {(() => {
+                  const advancePaidEarlier = Number((completedBillData as any).advancePaidEarlier) || 0;
                   const billActualReceived =
                     typeof completedBillData.cashReceived === "number"
                       ? completedBillData.cashReceived
                       : completedBillData.grandTotal;
+                  const totalPaidTowardsBill = billActualReceived + advancePaidEarlier;
                   const billBalDue =
-                    billActualReceived < completedBillData.grandTotal
-                      ? completedBillData.grandTotal - billActualReceived
+                    totalPaidTowardsBill < completedBillData.grandTotal
+                      ? completedBillData.grandTotal - totalPaidTowardsBill
                       : 0;
                   const billChange =
-                    billActualReceived > completedBillData.grandTotal
-                      ? billActualReceived - completedBillData.grandTotal
+                    totalPaidTowardsBill > completedBillData.grandTotal
+                      ? totalPaidTowardsBill - completedBillData.grandTotal
                       : 0;
                   return (
                     <>
@@ -4668,8 +4685,12 @@ export default function POSBilling() {
           <ReceiveRemainingPaymentModal
             order={selectedAdvance}
             onClose={closeAdvanceDialog}
-            onSuccess={async () => {
+            onSuccess={async (finalizedOrder) => {
               closeAdvanceDialog();
+              if (finalizedOrder) {
+                setOrders((prev) => [finalizedOrder, ...prev.filter((o) => o.id !== finalizedOrder.id)]);
+                setCompletedBillData(finalizedOrder);
+              }
               await fetchData();
               router.refresh();
             }}
@@ -5047,12 +5068,8 @@ export default function POSBilling() {
                                       </svg>
                                     </button>
                                     <button onClick={() => {
-                                      if (a.status === "COMPLETED" && a.finalized_order_id) {
-                                        setActiveInvoiceId(a.finalized_order_id);
-                                      } else {
-                                        printAdvanceReceipt(a.id);
-                                      }
-                                    }} title={a.status === "COMPLETED" ? "Open Invoice" : "Print Advance Receipt"} className="flex items-center justify-center w-8 h-8 bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-md transition-colors cursor-pointer shrink-0">
+                                        setActiveInvoiceId(a.finalized_order_id || a.id);
+                                      }} title="View invoice" className="flex items-center justify-center w-8 h-8 bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-md transition-colors cursor-pointer shrink-0">
                                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                       </svg>
@@ -5223,14 +5240,10 @@ export default function POSBilling() {
                               </button>
 
                               <button
-                                onClick={() => {
-                                  if (a.status === "COMPLETED" && a.finalized_order_id) {
-                                    setActiveInvoiceId(a.finalized_order_id);
-                                  } else {
-                                    printAdvanceReceipt(a.id);
-                                  }
-                                }}
-                                title={a.status === "COMPLETED" ? "Open Invoice" : "Print Advance Receipt"}
+                                  onClick={() => {
+                                    setActiveInvoiceId(a.finalized_order_id || a.id);
+                                  }}
+                                  title="View invoice"
                                 className="flex-1 min-h-[40px] flex items-center justify-center bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-xl transition-colors cursor-pointer"
                               >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -7818,6 +7831,22 @@ export default function POSBilling() {
                   <span>Invoice Preview • #{activeInvoiceId}</span>
                 </h3>
                 <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const iframe = document.querySelector(`iframe[title="Invoice ${activeInvoiceId}"]`) as HTMLIFrameElement | null;
+                      if (iframe && iframe.contentWindow) {
+                        iframe.contentWindow.focus();
+                        iframe.contentWindow.print();
+                      } else {
+                        window.open(`/invoice/${activeInvoiceId}?print=true`, "_blank");
+                      }
+                    }}
+                    className="text-[11px] font-semibold text-neutral-300 hover:text-white px-2.5 py-1 bg-white/10 hover:bg-white/20 rounded transition-colors flex items-center gap-1 cursor-pointer"
+                  >
+                    <Printer className="w-3 h-3" />
+                    <span>Print</span>
+                  </button>
                   <a
                     href={`/invoice/${activeInvoiceId}`}
                     target="_blank"

@@ -1579,10 +1579,24 @@ export async function supabaseFinalizeAdvanceOrder(payload: {
     finalizedInvoiceId = `INV-${yr}-${rand}`;
   }
 
+  let customerId = advance.customer_id || null;
+  if (!customerId && (advance.customer_name || advance.customer_phone)) {
+    try {
+      const cust = await supabaseUpsertCustomer(
+        advance.customer_name || 'Counter Customer',
+        advance.customer_phone || '',
+        advance.customer_address || null
+      );
+      if (cust?.id) customerId = cust.id;
+    } catch (e) {
+      // Continue with null if customer upsert fails
+    }
+  }
+
   // 1. Prepare official invoice row with ONLY existing columns in Postgres orders schema
   const orderPayload: any = {
     id: finalizedInvoiceId,
-    customer_id: advance.customer_id || null,
+    customer_id: customerId,
     source: 'OFFLINE',
     status: 'COMPLETED',
     is_gst: Boolean(calc.gstPercentage > 0),

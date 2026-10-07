@@ -179,7 +179,6 @@ export function calculateAdvanceOrderTotals(
   const advancePaid = roundToTwo(Math.max(0, Number(params.advanceAmount) || 0));
   const additionalPaid = roundToTwo(Math.max(0, Number(params.additionalPaid) || 0));
   let totalPaid = roundToTwo(advancePaid + additionalPaid);
-
   let remainingBalance = Math.max(0, roundToTwo(grandTotal - totalPaid));
   let settlementPaid = additionalPaid;
 
