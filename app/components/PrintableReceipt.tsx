@@ -93,6 +93,8 @@ export interface PrintableReceiptProps {
     payment_mode?: string;
     status?: string;
     source?: string;
+    is_advance?: boolean;
+    order_type?: string;
     items: Array<{
       snapshot_name: string;
       snapshot_price: number | string;
@@ -114,9 +116,26 @@ export interface PrintableReceiptProps {
     balance_due?: number;
     amount_received?: number;
   };
+  headerBadge?: string;
 }
 
-export default function PrintableReceipt({ order }: PrintableReceiptProps) {
+export default function PrintableReceipt({ order, headerBadge }: PrintableReceiptProps) {
+  const getInvoiceHeaderBadge = () => {
+    if (headerBadge) return headerBadge;
+    // If viewed as an active/unsettled advance order
+    const isAdvanceOrder =
+      order.is_advance === true ||
+      order.order_type === "ADVANCE" ||
+      order.id?.startsWith("DEP-");
+
+    if (isAdvanceOrder && order.status?.toUpperCase() !== "COMPLETED") {
+      return "ADVANCE RECEIPT";
+    }
+
+    // For settled orders, completed sales, and records viewed in Order History
+    return "INVOICE";
+  };
+
   const formatINR = (val: number) =>
     Number(val || 0).toLocaleString("en-IN", {
       minimumFractionDigits: 2,
@@ -167,6 +186,55 @@ export default function PrintableReceipt({ order }: PrintableReceiptProps) {
 
   return (
     <div className="w-full max-w-[760px] mx-auto bg-white p-6 sm:p-8 font-sans text-zinc-900 border border-zinc-200 rounded-sm print:border-none print:p-0">
+      {/* Top Header Row with Salon Branding & Top-Right Header Badge */}
+      <div className="flex flex-col sm:flex-row justify-between items-start gap-6 pb-6 border-b border-zinc-200">
+        <div className="flex items-start gap-3.5 sm:gap-4">
+          <div className="w-14 h-14 sm:w-16 sm:h-16 shrink-0 rounded-sm border border-zinc-300 overflow-hidden bg-black p-1">
+            <img
+              src="/logo.jpeg"
+              alt="Love & Happy Unisex Salon"
+              className="w-full h-full object-contain"
+            />
+          </div>
+          <div className="space-y-1">
+            <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-zinc-900">
+              Love &amp; Happy Unisex Salon
+            </h1>
+            <p className="text-xs text-zinc-500 leading-relaxed max-w-xs">
+              No 65, 4 th cross west, Thillai Nagar, Tiruchchirappalli 620018
+            </p>
+            <div className="text-xs text-zinc-600 pt-1 space-y-0.5">
+              <p>Phone: +91 98431 12203</p>
+              {isGst && (
+                <p className="text-zinc-800 font-medium pt-0.5">
+                  GSTIN: <span className="font-mono">—</span> • State Code: 33
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className="sm:text-right space-y-1.5 shrink-0">
+          <div>
+            <span className="font-bold tracking-wider uppercase text-sm">
+              {getInvoiceHeaderBadge()}
+            </span>
+            <p className="text-xs font-mono text-zinc-500">#{order.id}</p>
+          </div>
+          <div className="text-xs text-zinc-600 space-y-0.5 pt-1">
+            <div>
+              <span className="text-zinc-400">Date: </span>
+              <span className="text-zinc-800 font-medium">{formattedDate}</span>
+            </div>
+            {order.status && (
+              <div>
+                <span className="text-zinc-400">Status: </span>
+                <span className="text-zinc-800 font-medium uppercase">{order.status}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
       {/* Top Customer Row / Place of Supply Header */}
       <div className="py-5 border-b border-zinc-200 flex flex-col sm:flex-row justify-between items-start gap-4 text-xs">
         <div>

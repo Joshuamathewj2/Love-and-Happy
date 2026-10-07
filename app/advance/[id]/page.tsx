@@ -134,6 +134,22 @@ export default async function AdvanceReceiptPage({
       })
     : null;
 
+  const getInvoiceHeaderBadge = () => {
+    // If viewed as an active/unsettled advance order
+    const isAdvanceOrder =
+      (advance as any).is_advance === true ||
+      (advance as any).order_type === "ADVANCE" ||
+      advance.id?.startsWith("DEP-") ||
+      Boolean(advance);
+
+    if (isAdvanceOrder && advance.status?.toUpperCase() !== "COMPLETED") {
+      return "ADVANCE RECEIPT";
+    }
+
+    // For settled orders, completed sales, and records viewed in Order History
+    return "INVOICE";
+  };
+
   return (
     <div
       className={`min-h-screen bg-zinc-100/70 text-zinc-900 font-sans ${
@@ -205,9 +221,9 @@ export default async function AdvanceReceiptPage({
           </div>
 
           <div className="text-[11px] pb-3 border-b border-dashed border-black/40 mb-3 space-y-1">
-            <div className="flex justify-between">
-              <span className="font-bold">
-                {isCompleted ? "FINAL INVOICE" : "ADVANCE RECEIPT"}
+            <div className="flex justify-between items-center">
+              <span className="font-bold tracking-wider uppercase text-sm">
+                {getInvoiceHeaderBadge()}
               </span>
               <span>#{advance.id}</span>
             </div>
@@ -361,8 +377,8 @@ export default async function AdvanceReceiptPage({
 
             <div className="sm:text-right space-y-1.5 shrink-0">
               <div>
-                <span className="text-lg font-bold tracking-tight text-zinc-900 uppercase">
-                  {isCompleted ? "Final Tax Invoice" : "Advance Deposit Receipt"}
+                <span className="font-bold tracking-wider uppercase text-sm text-zinc-900">
+                  {getInvoiceHeaderBadge()}
                 </span>
                 <p className="text-xs font-mono text-zinc-500">#{advance.id}</p>
               </div>

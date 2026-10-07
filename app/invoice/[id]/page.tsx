@@ -273,6 +273,21 @@ export default async function InvoicePage({
     timeZone: "Asia/Kolkata",
   });
 
+  const getInvoiceHeaderBadge = () => {
+    // If viewed as an active/unsettled advance order
+    const isAdvanceOrder =
+      order.is_advance === true ||
+      (order as any).order_type === "ADVANCE" ||
+      order.id?.startsWith("DEP-");
+
+    if (isAdvanceOrder && order.status?.toUpperCase() !== "COMPLETED") {
+      return "ADVANCE RECEIPT";
+    }
+
+    // For settled orders, completed sales, and records viewed in Order History
+    return "INVOICE";
+  };
+
   return (
     <div
       className={`min-h-screen bg-zinc-100/70 text-zinc-900 font-sans ${
@@ -341,8 +356,10 @@ export default async function InvoicePage({
             {order.is_gst && <p className="text-[11px] font-bold mt-1">GSTIN: —</p>}
           </div>
           <div className="text-[11px] pb-3 border-b border-dashed border-black/40 mb-3 space-y-1">
-            <div className="flex justify-between">
-              <span className="font-bold">{order.is_gst ? "TAX INVOICE" : "INVOICE"}</span>
+            <div className="flex justify-between items-center">
+              <span className="font-bold tracking-wider uppercase text-sm">
+                {getInvoiceHeaderBadge()}
+              </span>
               <span>#{order.id}</span>
             </div>
             <div className="flex justify-between">
@@ -491,8 +508,8 @@ export default async function InvoicePage({
 
           <div className="sm:text-right space-y-1.5 shrink-0">
             <div>
-              <span className="text-lg font-bold tracking-tight text-zinc-900 uppercase">
-                {order.is_gst ? "Tax Invoice" : "Invoice"}
+              <span className="font-bold tracking-wider uppercase text-sm text-zinc-900">
+                {getInvoiceHeaderBadge()}
               </span>
               <p className="text-xs font-mono text-zinc-500">#{order.id}</p>
             </div>

@@ -597,7 +597,7 @@ export default function AdminOrdersPage() {
                           <div className="flex items-center justify-end gap-1.5">
                             <Link
                               href={`/invoice/${o.id}`}
-                              title="View Tax Invoice"
+                              title="View Invoice"
                               className="inline-flex items-center gap-1 px-2.5 py-1 bg-cyan-50 hover:bg-cyan-100 text-cyan-700 text-xs font-bold rounded-lg transition-colors"
                             >
                               <FileText className="w-3.5 h-3.5" /> Invoice

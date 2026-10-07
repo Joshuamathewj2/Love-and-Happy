@@ -50,7 +50,7 @@ export function InvoiceActions({
     if (typeof window !== "undefined") {
       const currentUrl = window.location.href;
       const cleanPhone = (customerPhone || "").replace(/\D/g, "").slice(-10);
-      const invoiceType = isGst ? "Tax Invoice" : "Invoice";
+      const invoiceType = "Invoice";
       const text = `*Love & Happy Unisex Salon*\n${invoiceType} #${orderId}\nCustomer: ${customerName || "Counter Sale"}\nTotal: ₹${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}\n\nInvoice Link:\n${currentUrl}`;
       const encoded = encodeURIComponent(text);
 

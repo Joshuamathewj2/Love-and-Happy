@@ -220,6 +220,10 @@ export default function AdminAdvanceOrdersPage() {
   };
 
   const handleStatusChange = async (orderId: string, newStatus: string, order: any) => {
+    if (order.status?.toUpperCase() === 'COMPLETED') return;
+    const targetOrder = advanceOrders.find((a) => a.id === orderId);
+    if (targetOrder?.status?.toUpperCase() === 'COMPLETED') return;
+    
     const statusUpper = String(newStatus || "").trim().toUpperCase() as AdvanceOrderStatus;
 
     // If Completed selected and there is a remaining balance, open payment popup instead
@@ -507,61 +511,61 @@ export default function AdminAdvanceOrdersPage() {
                   </td>
                 </tr>
               ) : (
-                filteredOrders.map((a: AdvanceOrderWithRelations) => {
+                filteredOrders.map((order: AdvanceOrderWithRelations) => {
                   const totals = calculateAdvanceOrderTotals({
-                    items: (a.items || []).map((it) => ({
+                    items: (order.items || []).map((it) => ({
                       price: Number(it.snapshot_price) || 0,
                       qty: Number(it.quantity) || 1,
                     })),
-                    subtotal: Number(a.subtotal) || Number(a.total_amount) || 0,
-                    isGst: a.is_gst !== undefined ? Boolean(a.is_gst) : undefined,
-                    gstPercentage: a.gst_percentage !== undefined ? Number(a.gst_percentage) : undefined,
-                    taxMode: a.tax_mode || "exclusive",
+                    subtotal: Number(order.subtotal) || Number(order.total_amount) || 0,
+                    isGst: order.is_gst !== undefined ? Boolean(order.is_gst) : undefined,
+                    gstPercentage: order.gst_percentage !== undefined ? Number(order.gst_percentage) : undefined,
+                    taxMode: order.tax_mode || "exclusive",
                     manualDiscount:
-                      Number(a.discount_amount) > 0 || Number(a.discount_value) > 0
+                      Number(order.discount_amount) > 0 || Number(order.discount_value) > 0
                         ? {
-                            type: (((a.discount_type || "FIXED").toUpperCase() as any)),
-                            value: Number(a.discount_value) || Number(a.discount_amount) || 0,
+                            type: (((order.discount_type || "FIXED").toUpperCase() as any)),
+                            value: Number(order.discount_value) || Number(order.discount_amount) || 0,
                           }
                         : null,
-                    deliveryFee: Number(a.delivery_fee) || 0,
-                    advanceAmount: Number(a.deposit_amount) || 0,
-                    grandTotal: Number(a.total_amount) || undefined,
+                    deliveryFee: Number(order.delivery_fee) || 0,
+                    advanceAmount: Number(order.deposit_amount) || 0,
+                    grandTotal: Number(order.total_amount) || undefined,
                   });
                   const total = totals.grandTotal;
                   const paid = totals.totalPaid;
                   const balanceDue = totals.remainingBalance;
-                  const statusUpper = (a.status || "PENDING").toUpperCase();
+                  const isCompleted = order.status?.toUpperCase() === 'COMPLETED';
 
                   return (
-                    <tr key={a.id} className="hover:bg-slate-50/60 transition-colors">
+                    <tr key={order.id} className="hover:bg-slate-50/60 transition-colors">
                       {/* Deposit ID (2-line layout) */}
                       <td className="w-[14%] text-left px-4 py-3 align-middle">
                         <p className="text-xs font-bold text-slate-950 font-mono">
-                          {a.id}
+                          {order.id}
                         </p>
                         <p className="text-[11px] text-slate-400">
-                          {new Date(a.created_at).toLocaleDateString("en-IN")}
+                          {new Date(order.created_at).toLocaleDateString("en-IN")}
                         </p>
                       </td>
 
                       {/* Customer */}
                       <td className="w-[14%] text-left px-4 py-3 align-middle">
-                        <p className="font-bold text-slate-900">{a.customer_name}</p>
-                        <p className="text-[11px] text-slate-500 font-mono">{a.customer_phone}</p>
+                        <p className="font-bold text-slate-900">{order.customer_name}</p>
+                        <p className="text-[11px] text-slate-500 font-mono">{order.customer_phone}</p>
                       </td>
 
                       {/* Product */}
                       <td className="w-[18%] text-left px-4 py-3 align-middle">
                         <div className="text-[11px] space-y-0.5">
-                          {a.items.slice(0, 2).map((i) => (
+                          {order.items.slice(0, 2).map((i) => (
                             <p key={i.id} className="font-medium text-slate-800 truncate">
                               {i.quantity}× {i.snapshot_name}
                             </p>
                           ))}
-                          {a.items.length > 2 && (
+                          {order.items.length > 2 && (
                             <p className="text-[10px] text-slate-400 font-medium">
-                              +{a.items.length - 2} more items
+                              +{order.items.length - 2} more items
                             </p>
                           )}
                         </div>
@@ -584,41 +588,45 @@ export default function AdminAdvanceOrdersPage() {
 
                       {/* Delivery */}
                       <td className="w-[11%] text-center px-4 py-3 align-middle font-medium text-slate-700 text-xs">
-                        {a.delivery_date
-                          ? new Date(a.delivery_date).toLocaleDateString("en-IN")
+                        {order.delivery_date
+                          ? new Date(order.delivery_date).toLocaleDateString("en-IN")
                           : "—"}
                       </td>
 
                       {/* Status */}
                       <td className="w-[12%] text-center px-4 py-3 align-middle">
-                        <div className="relative inline-block w-full max-w-[150px] mx-auto">
-                          <select
-                            key={`adv-status-admin-${a.id}-${statusUpper}`}
-                            value={statusUpper}
-                            onChange={(e) => handleStatusChange(a.id, e.target.value, a)}
-                            className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
-                              statusUpper === "COMPLETED"
-                                ? "bg-emerald-50 text-emerald-800 border-emerald-300 ring-1 ring-pink-300"
-                                : statusUpper === "READY"
-                                ? "bg-blue-50 text-blue-800 border-blue-300 ring-1 ring-pink-300"
-                                : statusUpper === "CANCELLED"
-                                ? "bg-rose-50 text-rose-800 border-rose-300"
-                                : "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-pink-300"
-                            }`}
-                          >
-                            <option value="PENDING" className="bg-white text-gray-900 font-semibold">PENDING</option>
-                            <option value="READY" className="bg-white text-gray-900 font-semibold">READY</option>
-                            <option value="COMPLETED" className="bg-white text-gray-900 font-semibold">COMPLETED</option>
-                            <option value="CANCELLED" className="bg-white text-gray-900 font-semibold">CANCELLED</option>
-                          </select>
-                          
-                          {/* Chevron Down Icon */}
-                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
-                            </svg>
+                        {isCompleted ? (
+                          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
+                            COMPLETED
+                          </span>
+                        ) : (
+                          <div className="relative inline-block w-full max-w-[150px] mx-auto">
+                            <select
+                              key={`adv-status-admin-${order.id}-${order.status}`}
+                              value={order.status?.toUpperCase() || "PENDING"}
+                              onChange={(e) => handleStatusChange(order.id, e.target.value, order)}
+                              className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                                order.status?.toUpperCase() === "READY"
+                                  ? "bg-blue-50 text-blue-800 border-blue-300 ring-1 ring-pink-300"
+                                  : order.status?.toUpperCase() === "CANCELLED"
+                                  ? "bg-rose-50 text-rose-800 border-rose-300"
+                                  : "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-pink-300"
+                              }`}
+                            >
+                              <option value="PENDING" className="bg-white text-gray-900 font-semibold">PENDING</option>
+                              <option value="READY" className="bg-white text-gray-900 font-semibold">READY</option>
+                              <option value="COMPLETED" className="bg-white text-gray-900 font-semibold">COMPLETED</option>
+                              <option value="CANCELLED" className="bg-white text-gray-900 font-semibold">CANCELLED</option>
+                            </select>
+
+                            {/* Chevron Down Icon */}
+                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
+                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </div>
                           </div>
-                        </div>
+                        )}
                       </td>
 
                       {/* Actions (WhatsApp, Invoice, View Details, Collect Payment, Delete) */}
@@ -626,7 +634,7 @@ export default function AdminAdvanceOrdersPage() {
                         <div className="flex items-center justify-end gap-1.5 flex-nowrap">
                           {/* WhatsApp */}
                           <a
-                            href={`https://api.whatsapp.com/send?phone=91${(a.customer_phone || "").replace(/\D/g, "").slice(-10)}`}
+                            href={`https://api.whatsapp.com/send?phone=91${(order.customer_phone || "").replace(/\D/g, "").slice(-10)}`}
                             target="_blank"
                             rel="noreferrer"
                             title="Send on WhatsApp"
@@ -637,7 +645,7 @@ export default function AdminAdvanceOrdersPage() {
 
                           {/* Invoice */}
                           <Link
-                            href={`/advance/${a.id}`}
+                            href={`/advance/${order.id}`}
                             title="Print / View Invoice"
                             className="flex items-center justify-center w-7 h-7 bg-cyan-50 hover:bg-cyan-100 text-cyan-600 rounded-md transition-colors shrink-0"
                           >
@@ -646,7 +654,7 @@ export default function AdminAdvanceOrdersPage() {
 
                           {/* View Details */}
                           <Link
-                            href={`/advance/${a.id}`}
+                            href={`/advance/${order.id}`}
                             title="View Details"
                             className="flex items-center justify-center w-7 h-7 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-md transition-colors shrink-0"
                           >
@@ -654,10 +662,10 @@ export default function AdminAdvanceOrdersPage() {
                           </Link>
 
                           {/* Collect Payment */}
-                          {statusUpper !== "COMPLETED" && statusUpper !== "CANCELLED" && (
+                          {!isCompleted && order.status?.toUpperCase() !== "CANCELLED" && (
                             <button
                               type="button"
-                              onClick={() => openReceiveModal(a)}
+                              onClick={() => openReceiveModal(order)}
                               title="Collect Payment"
                               className="flex items-center justify-center w-7 h-7 bg-emerald-50 hover:bg-emerald-100 text-emerald-600 rounded-md transition-colors shrink-0 cursor-pointer"
                             >
@@ -667,7 +675,7 @@ export default function AdminAdvanceOrdersPage() {
 
                           {/* Delete */}
                           <button
-                            onClick={() => handleDelete(a.id)}
+                            onClick={() => handleDelete(order.id)}
                             title="Delete Order"
                             className="flex items-center justify-center w-7 h-7 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-md transition-colors shrink-0"
                           >

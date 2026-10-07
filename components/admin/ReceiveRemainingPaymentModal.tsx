@@ -20,21 +20,12 @@ export function ReceiveRemainingPaymentModal({
 }: ReceiveRemainingPaymentModalProps) {
   const [discountType, setDiscountType] = useState<"FIXED" | "PERCENT">("FIXED");
   const [discountValue, setDiscountValue] = useState<number | string>(0);
-  const [invoiceType, setInvoiceType] = useState<"NON_GST" | "GST">(
-    order.is_gst ? "GST" : "NON_GST"
-  );
-  const [gstRate, setGstRate] = useState<number | string>(
-    order.gst_percentage !== undefined && order.gst_percentage !== null
-      ? Number(order.gst_percentage)
-      : 18
-  );
-  const initialTaxMode: "inclusive" | "exclusive" =
+  const taxMode: "inclusive" | "exclusive" =
     (order as any).tax_mode === "exclusive" ||
     ((order as any).tax_mode !== "inclusive" &&
       Number(order.total_amount) > Number(order.subtotal) + (Number((order as any).delivery_fee) || 0))
       ? "exclusive"
       : "inclusive";
-  const [taxMode, setTaxMode] = useState<"inclusive" | "exclusive">(initialTaxMode);
   const [paymentMode, setPaymentMode] = useState<"CASH" | "GPAY">("CASH");
   const [isFinalizing, setIsFinalizing] = useState<boolean>(false);
   const isFinalizingLock = useRef<boolean>(false);
@@ -43,11 +34,11 @@ export function ReceiveRemainingPaymentModal({
   const rawInput = Number(discountValue);
   const safeDiscount = isNaN(rawInput) || rawInput < 0 ? 0 : rawInput;
 
-  // Compute safe numeric GST percentage (0 - 100)
-  const parsedGstRate = typeof gstRate === "string" ? parseFloat(gstRate) : Number(gstRate);
-  const numericGstRate = isNaN(parsedGstRate) || parsedGstRate < 0 ? 0 : Math.min(100, parsedGstRate);
-  const halfRate = numericGstRate / 2;
-  const halfRateStr = Number(halfRate.toFixed(4)).toString();
+  // Safe numeric GST percentage from order (default 18)
+  const numericGstRate =
+    order.gst_percentage !== undefined && order.gst_percentage !== null && !isNaN(Number(order.gst_percentage))
+      ? Math.min(100, Math.max(0, Number(order.gst_percentage)))
+      : 18;
 
   // 1. Base order totals (without manual discount) for 3-column stats
   const baseTotals = calculateAdvanceOrderTotals({
@@ -57,7 +48,7 @@ export function ReceiveRemainingPaymentModal({
       name: it.snapshot_name || "Service",
     })),
     subtotal: Number(order.subtotal) || Number(order.total_amount) || 0,
-    isGst: invoiceType === "GST",
+    isGst: Boolean(order.is_gst),
     gstPercentage: numericGstRate,
     taxMode: taxMode,
     manualDiscount: null,
@@ -73,7 +64,7 @@ export function ReceiveRemainingPaymentModal({
       name: it.snapshot_name || "Service",
     })),
     subtotal: Number(order.subtotal) || Number(order.total_amount) || 0,
-    isGst: invoiceType === "GST",
+    isGst: Boolean(order.is_gst),
     gstPercentage: numericGstRate,
     taxMode: taxMode,
     manualDiscount: {
@@ -120,8 +111,8 @@ export function ReceiveRemainingPaymentModal({
       const res = await finalizeAdvanceOrder({
         advanceOrderId: order.id,
         invoiceId,
-        isGst: invoiceType === "GST",
-        gstPercentage: invoiceType === "GST" ? numericGstRate : 0,
+        isGst: Boolean(order.is_gst),
+        gstPercentage: Boolean(order.is_gst) ? numericGstRate : 0,
         discountType: discountType,
         discountValue: safeDiscount,
         discountAmount: calculatedDiscount,
@@ -321,110 +312,6 @@ export function ReceiveRemainingPaymentModal({
               <p className="mt-1 text-[11px] font-medium text-rose-600">
                 {liveTotals.errorMessage}
               </p>
-            )}
-          </div>
-
-          {/* 7. Invoice Type Selector (NON-GST BILL vs GST INVOICE) */}
-          <div>
-            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-[0.05em] mb-1.5">
-              INVOICE TYPE
-            </label>
-            <div className="bg-[#f3f4f6] p-1.5 rounded-full flex gap-1 border border-gray-200/80 items-center justify-between shadow-inner w-full mb-3">
-              <button
-                type="button"
-                onClick={() => setInvoiceType("NON_GST")}
-                className={`flex-1 py-1.5 rounded-full text-[10px] font-bold tracking-wider uppercase transition-all cursor-pointer ${
-                  invoiceType === "NON_GST"
-                    ? "bg-[#111827] text-white shadow-sm"
-                    : "text-[#000000] hover:text-gray-700"
-                }`}
-              >
-                NON-GST BILL
-              </button>
-              <button
-                type="button"
-                onClick={() => setInvoiceType("GST")}
-                className={`flex-1 py-1.5 rounded-full text-[10px] font-bold tracking-wider uppercase transition-all cursor-pointer ${
-                  invoiceType === "GST"
-                    ? "bg-[#0097A7] text-white shadow-sm"
-                    : "text-[#000000] hover:text-gray-700"
-                }`}
-              >
-                GST INVOICE
-              </button>
-            </div>
-
-            {invoiceType === "GST" && (
-              <div className="bg-blue-50 border border-blue-100 rounded-[14px] p-3.5 space-y-3 relative overflow-hidden">
-                <div className="flex items-center justify-between gap-3">
-                  <label className="text-[10px] font-bold text-blue-800 uppercase tracking-wider">
-                    GST RATE
-                  </label>
-                  <div className="relative flex items-center">
-                    <input
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.5"
-                      value={gstRate}
-                      onChange={(e) => setGstRate(e.target.value)}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      placeholder="18"
-                      className="w-24 bg-white border border-blue-200 text-blue-900 text-xs font-bold rounded-lg pl-3 pr-7 py-1.5 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-400 shadow-xs text-right font-mono"
-                    />
-                    <span className="absolute right-2.5 text-xs font-bold text-blue-500 pointer-events-none select-none">
-                      %
-                    </span>
-                  </div>
-                </div>
-
-                {/* Tax Mode Segmented Selector */}
-                <div className="flex items-center bg-blue-100/60 border border-blue-200/80 rounded-lg p-0.5 w-full">
-                  <button
-                    type="button"
-                    onClick={() => setTaxMode("inclusive")}
-                    className={`flex-1 py-1 rounded-md text-[10px] font-bold tracking-wider uppercase transition-all cursor-pointer ${
-                      taxMode === "inclusive"
-                        ? "bg-white text-blue-900 shadow-xs"
-                        : "text-blue-700/80 hover:text-blue-900"
-                    }`}
-                  >
-                    Inclusive (Tax incl.)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setTaxMode("exclusive")}
-                    className={`flex-1 py-1 rounded-md text-[10px] font-bold tracking-wider uppercase transition-all cursor-pointer ${
-                      taxMode === "exclusive"
-                        ? "bg-white text-blue-900 shadow-xs"
-                        : "text-blue-700/80 hover:text-blue-900"
-                    }`}
-                  >
-                    Exclusive (+GST)
-                  </button>
-                </div>
-
-                <div className="pt-2 border-t border-blue-200/60 space-y-1.5">
-                  <div className="flex justify-between text-[11px]">
-                    <span className="text-blue-700 font-medium">Taxable Value</span>
-                    <span className="font-bold text-blue-900 font-mono">
-                      ₹{liveTotals.taxableAmount.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-[11px]">
-                    <span className="text-blue-700 font-medium">CGST ({halfRateStr}%)</span>
-                    <span className="font-bold text-blue-900 font-mono">
-                      ₹{liveTotals.cgstAmount.toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-[11px]">
-                    <span className="text-blue-700 font-medium">SGST ({halfRateStr}%)</span>
-                    <span className="font-bold text-blue-900 font-mono">
-                      ₹{liveTotals.sgstAmount.toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-              </div>
             )}
           </div>
 

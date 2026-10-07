@@ -5052,7 +5052,7 @@ export default function POSBilling() {
                                       } else {
                                         printAdvanceReceipt(a.id);
                                       }
-                                    }} title={a.status === "COMPLETED" ? "Open Final Invoice" : "Print Advance Receipt"} className="flex items-center justify-center w-8 h-8 bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-md transition-colors cursor-pointer shrink-0">
+                                    }} title={a.status === "COMPLETED" ? "Open Invoice" : "Print Advance Receipt"} className="flex items-center justify-center w-8 h-8 bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-md transition-colors cursor-pointer shrink-0">
                                       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
                                       </svg>
@@ -5230,7 +5230,7 @@ export default function POSBilling() {
                                     printAdvanceReceipt(a.id);
                                   }
                                 }}
-                                title={a.status === "COMPLETED" ? "Open Final Invoice" : "Print Advance Receipt"}
+                                title={a.status === "COMPLETED" ? "Open Invoice" : "Print Advance Receipt"}
                                 className="flex-1 min-h-[40px] flex items-center justify-center bg-[#0097A7]/10 hover:bg-[#0097A7]/20 text-[#0097A7] rounded-xl transition-colors cursor-pointer"
                               >
                                 <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
