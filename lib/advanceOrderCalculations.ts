@@ -182,17 +182,22 @@ export function calculateAdvanceOrderTotals(
   let remainingBalance = Math.max(0, roundToTwo(grandTotal - totalPaid));
   let settlementPaid = additionalPaid;
 
+  if (params.isCompleted) {
+    totalPaid = grandTotal;
+    remainingBalance = 0;
+    settlementPaid = Math.max(0, roundToTwo(grandTotal - advancePaid));
+  }
+
   let isValid = true;
   let errorMessage: string | undefined = undefined;
 
   // Validation rules:
   // - Discount cannot make grandTotal < totalPaid (advance already collected).
   // If discount would make grandTotal < advancePaid, block it.
-  if (grandTotal < advancePaid) {
+  if (!params.isCompleted && grandTotal < advancePaid) {
     isValid = false;
     errorMessage = `Discount is too high. Total bill (₹${grandTotal.toFixed(2)}) cannot be less than the advance already paid (₹${advancePaid.toFixed(2)}).`;
   }
-
 
   return {
     subtotal,
@@ -211,6 +216,209 @@ export function calculateAdvanceOrderTotals(
     remainingBalance,
     advancePaid,
     settlementPaid,
+    isValid,
+    errorMessage,
+  };
+}
+
+export interface OrderTotalsResult {
+  subtotal: number;
+  discount: number;
+  taxable: number;
+  gstRate: number;
+  gst: number;
+  deliveryFee: number;
+  total: number;
+  paid: number;
+  balance: number;
+  advancePaid: number;
+  discountLabel: string;
+  gstLabel: string;
+  cgst: number;
+  sgst: number;
+  isValid: boolean;
+  errorMessage?: string;
+}
+
+/**
+ * Universal calculation utility for orders, advance orders, modals, and invoices.
+ */
+export function calculateOrderTotals(orderOrParams: any): OrderTotalsResult {
+  if (!orderOrParams) {
+    return {
+      subtotal: 0,
+      discount: 0,
+      taxable: 0,
+      gstRate: 0,
+      gst: 0,
+      deliveryFee: 0,
+      total: 0,
+      paid: 0,
+      balance: 0,
+      advancePaid: 0,
+      discountLabel: "Manual Discount",
+      gstLabel: "GST",
+      cgst: 0,
+      sgst: 0,
+      isValid: true,
+    };
+  }
+
+  // 1. Raw Subtotal: calculate from items if available
+  let rawSubtotal = 0;
+  const items =
+    orderOrParams.items ||
+    orderOrParams.order_items ||
+    orderOrParams.advance_order_items;
+
+  if (Array.isArray(items) && items.length > 0) {
+    rawSubtotal = items.reduce((sum: number, it: any) => {
+      const price = Number(it.snapshot_price ?? it.price ?? 0) || 0;
+      const qty = Number(it.quantity ?? it.qty ?? 1) || 1;
+      return sum + price * qty;
+    }, 0);
+  } else if (orderOrParams.subtotal !== undefined && orderOrParams.subtotal !== null) {
+    rawSubtotal = Number(orderOrParams.subtotal) || 0;
+  } else if (orderOrParams.total_amount !== undefined && orderOrParams.total_amount !== null) {
+    rawSubtotal = Number(orderOrParams.total_amount) || 0;
+  } else if (orderOrParams.grand_total !== undefined && orderOrParams.grand_total !== null) {
+    rawSubtotal = Number(orderOrParams.grand_total) || 0;
+  }
+  const subtotal = roundToTwo(rawSubtotal);
+
+  // 2. Discount
+  const discType = String(
+    orderOrParams.discount_type ||
+    orderOrParams.discountType ||
+    orderOrParams.manualDiscount?.type ||
+    orderOrParams.couponDiscount?.type ||
+    "FIXED"
+  ).toUpperCase();
+
+  const discVal = Number(
+    orderOrParams.discount_value ??
+    orderOrParams.discountValue ??
+    orderOrParams.manualDiscount?.value ??
+    orderOrParams.couponDiscount?.value ??
+    orderOrParams.discount_amount ??
+    orderOrParams.discountAmount ??
+    orderOrParams.discount ??
+    0
+  ) || 0;
+
+  let discount = 0;
+  let discountLabel = "Manual Discount";
+  if (discVal > 0) {
+    if (discType === "PERCENT") {
+      discount = roundToTwo(subtotal * (discVal / 100));
+      discountLabel = `Discount (${discVal}%)`;
+    } else {
+      discount = roundToTwo(discVal);
+      discountLabel = "Manual Discount";
+    }
+  }
+  if (discount > subtotal) {
+    discount = subtotal;
+  }
+  const taxable = Math.max(0, roundToTwo(subtotal - discount));
+
+  // 3. GST Calculation
+  const isGst =
+    orderOrParams.is_gst !== undefined
+      ? Boolean(orderOrParams.is_gst)
+      : orderOrParams.isGst !== undefined
+      ? Boolean(orderOrParams.isGst)
+      : Number(orderOrParams.gst_percentage ?? orderOrParams.gstPercentage ?? orderOrParams.gst_amount ?? orderOrParams.gstAmount ?? 0) > 0;
+
+  const rawGstRate = Number(
+    orderOrParams.gst_percentage ??
+    orderOrParams.gstPercentage ??
+    0
+  );
+  const gstRate = isGst ? Math.max(0, isNaN(rawGstRate) ? 0 : rawGstRate) : 0;
+  const gstLabel = gstRate > 0 ? `GST (${gstRate}%)` : "GST";
+
+  let gst = 0;
+  const taxMode = orderOrParams.tax_mode || orderOrParams.taxMode || "exclusive";
+  if (isGst && gstRate > 0) {
+    if (taxMode === "inclusive") {
+      const taxBase = roundToTwo(taxable / (1 + gstRate / 100));
+      gst = roundToTwo(taxable - taxBase);
+    } else {
+      gst = roundToTwo(taxable * (gstRate / 100));
+    }
+  } else if (orderOrParams.gst_amount !== undefined && Number(orderOrParams.gst_amount) > 0) {
+    gst = roundToTwo(Number(orderOrParams.gst_amount));
+  } else if (orderOrParams.gstAmount !== undefined && Number(orderOrParams.gstAmount) > 0) {
+    gst = roundToTwo(Number(orderOrParams.gstAmount));
+  }
+
+  const cgst = roundToTwo(gst / 2);
+  const sgst = roundToTwo(gst - cgst);
+
+  // 4. Delivery Fee
+  const deliveryFee = roundToTwo(
+    Math.max(
+      0,
+      Number(
+        orderOrParams.delivery_fee ??
+        orderOrParams.deliveryFee ??
+        0
+      )
+    )
+  );
+
+  // 5. Total
+  let total = 0;
+  if (taxMode === "inclusive" && isGst && gstRate > 0) {
+    total = roundToTwo(taxable + deliveryFee);
+  } else {
+    total = roundToTwo(taxable + gst + deliveryFee);
+  }
+
+  // 6. Paid and Balance
+  const status = String(orderOrParams.status || "PENDING").trim().toUpperCase();
+  const isCompleted = status === "COMPLETED" || Boolean(orderOrParams.isCompleted);
+  const isCancelled = status === "CANCELLED";
+
+  const advancePaid = roundToTwo(
+    Math.max(
+      0,
+      Number(
+        orderOrParams.deposit_amount ??
+        orderOrParams.advanceAmount ??
+        orderOrParams.cash_received ??
+        orderOrParams.cashReceived ??
+        0
+      )
+    )
+  );
+
+  let paid = advancePaid;
+  let balance = Math.max(0, roundToTwo(total - paid));
+
+  let isValid = true;
+  let errorMessage: string | undefined;
+  if (!isCompleted && total < advancePaid) {
+    isValid = false;
+    errorMessage = `Discount is too high. Total bill (₹${total.toFixed(2)}) cannot be less than the advance already paid (₹${advancePaid.toFixed(2)}).`;
+  }
+
+  return {
+    subtotal,
+    discount,
+    taxable,
+    gstRate,
+    gst,
+    deliveryFee,
+    total,
+    paid,
+    balance,
+    advancePaid,
+    discountLabel,
+    gstLabel,
+    cgst,
+    sgst,
     isValid,
     errorMessage,
   };

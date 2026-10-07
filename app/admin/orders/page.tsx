@@ -70,9 +70,37 @@ export const isAdvanceOrder = (order: any): boolean => {
   );
 };
 
+const CACHE_KEY = "cached_orders_history";
+
 export default function AdminOrdersPage() {
-  const [orders, setOrders] = useState<OrderRecord[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [orders, setOrders] = useState<OrderRecord[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = sessionStorage.getItem(CACHE_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return parsed;
+          }
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
+  const [loading, setLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = sessionStorage.getItem(CACHE_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            return false;
+          }
+        }
+      } catch (e) {}
+    }
+    return true;
+  });
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>("ALL");
@@ -86,14 +114,30 @@ export default function AdminOrdersPage() {
 
   const fetchOrders = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
-    else setLoading(true);
+    else {
+      setLoading((prev) => (orders.length === 0 ? true : false));
+    }
 
     try {
-      // 1. Fetch orders reliably from orders table
+      // 1. Fetch orders reliably from orders table with optimized column selection
       const { data, error } = await supabase
         .from("orders")
         .select(`
-          *,
+          id,
+          customer_id,
+          source,
+          status,
+          is_gst,
+          subtotal,
+          discount_amount,
+          gst_percentage,
+          gst_amount,
+          delivery_fee,
+          grand_total,
+          cash_received,
+          payment_mode,
+          bill_date,
+          created_at,
           customers (
             name,
             phone,
@@ -119,7 +163,7 @@ export default function AdminOrdersPage() {
 
         const { data: flatData, error: flatError } = await supabase
           .from("orders")
-          .select("*")
+          .select("id, customer_id, source, status, is_gst, subtotal, discount_amount, gst_percentage, gst_amount, delivery_fee, grand_total, cash_received, payment_mode, bill_date, created_at")
           .order("created_at", { ascending: false });
 
         if (flatError) {
@@ -127,7 +171,7 @@ export default function AdminOrdersPage() {
             `[Orders] Flat fallback error [code: ${flatError.code}, message: ${flatError.message}]`
           );
         } else if (flatData) {
-          rawOrders = flatData;
+          rawOrders = flatData as any;
         }
       }
 
@@ -137,7 +181,19 @@ export default function AdminOrdersPage() {
         const { data: advData, error: advErr } = await supabase
           .from("advance_orders")
           .select(`
-            *,
+            id,
+            customer_id,
+            customer_name,
+            customer_phone,
+            customer_address,
+            status,
+            subtotal,
+            total_amount,
+            deposit_amount,
+            deposit_payment_mode,
+            finalized_order_id,
+            finalized_at,
+            created_at,
             customers (
               name,
               phone,
@@ -227,8 +283,11 @@ export default function AdminOrdersPage() {
 
       const dedupedList = Array.from(uniqueOrderMap.values());
       dedupedList.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-      // Completely overwrite state with fresh query result
+      // Completely overwrite state with fresh query result and update local cache
       setOrders(dedupedList);
+      try {
+        sessionStorage.setItem(CACHE_KEY, JSON.stringify(dedupedList));
+      } catch (e) {}
     } catch (err: any) {
       console.error("[Orders] Error fetching orders:", err);
     } finally {
@@ -240,25 +299,8 @@ export default function AdminOrdersPage() {
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Ensure auth session is restored before initial query execution
-    const initAuthAndFetch = async () => {
-      try {
-        const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-        if (sessionErr) {
-          console.warn("[Orders] Auth session check notice:", sessionErr);
-        } else if (session) {
-          console.log("[Orders] Active auth session verified:", session.user.email);
-        }
-      } catch (authErr) {
-        console.warn("[Orders] Session restoration notice:", authErr);
-      } finally {
-        if (isMounted) {
-          fetchOrders();
-        }
-      }
-    };
-
-    initAuthAndFetch();
+    // Immediately dispatch background fetch without awaiting sequential auth waterfall
+    fetchOrders();
 
     // 2. Listen to auth state transitions to refetch when session refreshes
     const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(() => {
@@ -520,7 +562,7 @@ export default function AdminOrdersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {loading ? (
+                {loading && orders.length === 0 ? (
                   <tr>
                     <td colSpan={9} className="p-12 text-center text-xs font-semibold text-slate-400">
                       Loading orders history...

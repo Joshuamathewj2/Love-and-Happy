@@ -3,7 +3,90 @@ import { ArrowLeft, FileText } from "lucide-react";
 import Link from "next/link";
 import { AdvanceReceiptActions } from "./AdvanceReceiptActions";
 import { INVOICE_TERMS_AND_NOTES, SALON_DETAILS } from "@/lib/constants";
-import { calculateAdvanceOrderTotals } from "@/lib/advanceOrderCalculations";
+import { calculateAdvanceOrderTotals, calculateOrderTotals } from "@/lib/advanceOrderCalculations";
+import { InvoiceTotalsBlock } from "@/components/InvoiceTotalsBlock";
+
+// Clean Indian Number-to-Words Converter
+function numberToWords(num: number): string {
+  if (!num || num === 0) return "Zero Rupees Only";
+  const a = [
+    "",
+    "One",
+    "Two",
+    "Three",
+    "Four",
+    "Five",
+    "Six",
+    "Seven",
+    "Eight",
+    "Nine",
+    "Ten",
+    "Eleven",
+    "Twelve",
+    "Thirteen",
+    "Fourteen",
+    "Fifteen",
+    "Sixteen",
+    "Seventeen",
+    "Eighteen",
+    "Nineteen",
+  ];
+  const b = [
+    "",
+    "",
+    "Twenty",
+    "Thirty",
+    "Forty",
+    "Fifty",
+    "Sixty",
+    "Seventy",
+    "Eighty",
+    "Ninety",
+  ];
+
+  const formatChunk = (n: number): string => {
+    let str = "";
+    if (n >= 100) {
+      str += a[Math.floor(n / 100)] + " Hundred ";
+      n %= 100;
+    }
+    if (n >= 20) {
+      str +=
+        b[Math.floor(n / 10)] + (n % 10 !== 0 ? " " + a[n % 10] : "") + " ";
+    } else if (n > 0) {
+      str += a[n] + " ";
+    }
+    return str.trim();
+  };
+
+  const integerPart = Math.floor(Math.abs(num));
+  const decimalPart = Math.round((Math.abs(num) - integerPart) * 100);
+
+  let result = "";
+  let n = integerPart;
+
+  const crore = Math.floor(n / 10000000);
+  n %= 10000000;
+  const lakh = Math.floor(n / 100000);
+  n %= 100000;
+  const thousand = Math.floor(n / 1000);
+  n %= 1000;
+  const hundred = n;
+
+  if (crore > 0) result += formatChunk(crore) + " Crore ";
+  if (lakh > 0) result += formatChunk(lakh) + " Lakh ";
+  if (thousand > 0) result += formatChunk(thousand) + " Thousand ";
+  if (hundred > 0) result += formatChunk(hundred) + " ";
+
+  result = result.trim();
+  if (!result) result = "Zero";
+
+  let out = result + " Rupees";
+  if (decimalPart > 0) {
+    out += " and " + formatChunk(decimalPart) + " Paise";
+  }
+  return out + " Only";
+}
 
 export default async function AdvanceReceiptPage({
   params,
@@ -77,31 +160,11 @@ export default async function AdvanceReceiptPage({
     );
   }
 
-  const totals = calculateAdvanceOrderTotals({
-    items: advance.items.map((it) => ({
-      price: Number(it.snapshot_price) || 0,
-      qty: Number(it.quantity) || 1,
-    })),
-    subtotal: Number(advance.subtotal) || Number(advance.total_amount) || 0,
-    isGst: (advance as any).is_gst !== undefined ? Boolean((advance as any).is_gst) : undefined,
-    gstPercentage: (advance as any).gst_percentage !== undefined ? Number((advance as any).gst_percentage) : undefined,
-    taxMode: (advance as any).tax_mode || "exclusive",
-    manualDiscount:
-      Number((advance as any).discount_amount) > 0 || Number((advance as any).discount_value) > 0
-        ? {
-            type: (((advance as any).discount_type || "FIXED").toUpperCase() as any),
-            value: Number((advance as any).discount_value) || Number((advance as any).discount_amount) || 0,
-          }
-        : null,
-    deliveryFee: Number((advance as any).delivery_fee) || 0,
-    advanceAmount: Number(advance.deposit_amount) || 0,
-    grandTotal: Number(advance.total_amount) || undefined,
-  });
-
-  const totalNum = totals.grandTotal;
+  const totals = calculateOrderTotals(advance);
+  const totalNum = totals.total;
   const isCompleted = advance.status === "COMPLETED";
-  const depositNum = totals.totalPaid;
-  const balanceNum = totals.remainingBalance;
+  const depositNum = totals.paid;
+  const balanceNum = totals.balance;
   const modeStr = String(advance.deposit_payment_mode || "CASH").toUpperCase();
   const depositLabel =
     modeStr === "GPAY"
@@ -287,48 +350,12 @@ export default async function AdvanceReceiptPage({
           </div>
 
           {/* Totals */}
-          <div className="text-[11px] py-3 border-b border-dashed border-black/40 mb-3 space-y-1.5">
-            <div className="flex justify-between">
-              <span>Subtotal:</span>
-              <span>₹{fmt(totals.subtotal)}</span>
-            </div>
-            {totals.discountAmount > 0 && (
-              <div className="flex justify-between text-black">
-                <span>Discount:</span>
-                <span>-₹{fmt(totals.discountAmount)}</span>
-              </div>
-            )}
-            {totals.gstAmount > 0 && (
-              <>
-                <div className="flex justify-between text-black">
-                  <span>CGST ({(totals.gstPercentage / 2).toFixed(1)}%):</span>
-                  <span>₹{fmt(totals.cgstAmount)}</span>
-                </div>
-                <div className="flex justify-between text-black">
-                  <span>SGST ({(totals.gstPercentage / 2).toFixed(1)}%):</span>
-                  <span>₹{fmt(totals.sgstAmount)}</span>
-                </div>
-              </>
-            )}
-            {totals.deliveryFee > 0 && (
-              <div className="flex justify-between text-black">
-                <span>Delivery:</span>
-                <span>₹{fmt(totals.deliveryFee)}</span>
-              </div>
-            )}
-            <div className="flex justify-between font-bold border-t border-dashed border-black/20 pt-1">
-              <span>Order Total:</span>
-              <span>₹{fmt(totalNum)}</span>
-            </div>
-            <div className="flex justify-between font-semibold">
-              <span>Deposit Paid ({depositLabel}):</span>
-              <span>₹{fmt(depositNum)}</span>
-            </div>
-            <div className="flex justify-between text-[13px] font-black mt-2 pt-1 border-t border-dashed border-black/40">
-              <span>BALANCE DUE:</span>
-              <span>₹{fmt(balanceNum)}</span>
-            </div>
-          </div>
+          <InvoiceTotalsBlock
+            totals={totals}
+            variant="thermal"
+            advancePaid={depositNum}
+            depositLabel={depositLabel}
+          />
 
           {advance.notes && (
             <div className="text-[10px] text-zinc-700 pb-2 mb-2 border-b border-dashed border-black/20">
@@ -472,7 +499,35 @@ export default async function AdvanceReceiptPage({
 
           {/* Totals & Terms */}
           <div className="border-t border-zinc-200 pt-4 flex flex-col sm:flex-row justify-between items-start gap-8 text-xs">
-            <div className="space-y-4 max-w-sm">
+            <div className="space-y-3.5 max-w-sm flex-1">
+              <div>
+                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                  AMOUNT IN WORDS
+                </div>
+                <div className="text-xs font-semibold italic text-slate-900">
+                  {numberToWords(totals.total)}
+                </div>
+              </div>
+
+              {/* Advance Paid & Balance Due */}
+              <div className="text-xs space-y-1 pt-1">
+                <div>
+                  <span className="text-slate-500 text-xs">Advance Paid: </span>
+                  <span className="font-bold text-slate-900">
+                    ₹{fmt(totals.advancePaid)}
+                  </span>
+                </div>
+                {totals.balance > 0 && (
+                  <div>
+                    <span className="text-slate-500 text-xs">Balance Due: </span>
+                    <span className="font-bold text-rose-600">
+                      ₹{fmt(totals.balance)}
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Terms & Notes */}
               <div className="text-[11px] text-zinc-500 leading-relaxed space-y-1">
                 <p className="font-semibold text-zinc-700">Terms &amp; Notes:</p>
                 {INVOICE_TERMS_AND_NOTES.map((term, i) => (
@@ -481,52 +536,8 @@ export default async function AdvanceReceiptPage({
               </div>
             </div>
 
-            <div className="w-full sm:w-64 space-y-2 text-xs">
-              <div className="flex justify-between text-zinc-600">
-                <span>Subtotal</span>
-                <span className="font-mono text-zinc-900">₹{fmt(totals.subtotal)}</span>
-              </div>
-              {totals.discountAmount > 0 && (
-                <div className="flex justify-between text-zinc-600">
-                  <span>Discount</span>
-                  <span className="font-mono text-zinc-900">− ₹{fmt(totals.discountAmount)}</span>
-                </div>
-              )}
-              {totals.gstAmount > 0 && (
-                <>
-                  <div className="flex justify-between text-zinc-600">
-                    <span>CGST ({(totals.gstPercentage / 2).toFixed(1)}%)</span>
-                    <span className="font-mono text-zinc-900">₹{fmt(totals.cgstAmount)}</span>
-                  </div>
-                  <div className="flex justify-between text-zinc-600">
-                    <span>SGST ({(totals.gstPercentage / 2).toFixed(1)}%)</span>
-                    <span className="font-mono text-zinc-900">₹{fmt(totals.sgstAmount)}</span>
-                  </div>
-                </>
-              )}
-              {totals.deliveryFee > 0 && (
-                <div className="flex justify-between text-zinc-600">
-                  <span>Delivery Fee</span>
-                  <span className="font-mono text-zinc-900">₹{fmt(totals.deliveryFee)}</span>
-                </div>
-              )}
-              <div className="flex justify-between text-zinc-900 font-bold border-t border-zinc-200 pt-1.5">
-                <span>Order Total</span>
-                <span className="font-mono text-zinc-900">₹{fmt(totalNum)}</span>
-              </div>
-              <div className="flex justify-between text-zinc-600">
-                <span>Deposit Paid ({depositLabel})</span>
-                <span className="font-mono text-zinc-900">− ₹{fmt(depositNum)}</span>
-              </div>
-              <div className="border-t border-zinc-900 pt-2.5 mt-2 flex justify-between items-baseline">
-                <span className="text-sm font-bold text-zinc-900 uppercase">
-                  Balance Due
-                </span>
-                <span className="font-mono text-lg font-bold text-zinc-900">
-                  ₹{fmt(balanceNum)}
-                </span>
-              </div>
-            </div>
+            {/* Right Side: Subtotal & Grand Total Block */}
+            <InvoiceTotalsBlock totals={totals} variant="a4" />
           </div>
 
           {advance.notes && (

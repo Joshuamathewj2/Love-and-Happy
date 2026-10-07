@@ -2,7 +2,7 @@ import React from "react";
 import Link from "next/link";
 import { MessageSquare, FileText, Eye, IndianRupee, Trash2 } from "lucide-react";
 import { AdvanceOrderWithRelations } from "@/lib/types";
-import { calculateAdvanceOrderTotals } from "@/lib/advanceOrderCalculations";
+import { calculateOrderTotals } from "@/lib/advanceOrderCalculations";
 
 export interface AdvanceOrdersTableProps {
   advanceOrders: AdvanceOrderWithRelations[];
@@ -46,30 +46,10 @@ export function AdvanceOrdersTable({
             </tr>
           ) : (
             advanceOrders.map((order: AdvanceOrderWithRelations) => {
-              const totals = calculateAdvanceOrderTotals({
-                items: (order.items || []).map((it) => ({
-                  price: Number(it.snapshot_price) || 0,
-                  qty: Number(it.quantity) || 1,
-                })),
-                subtotal: Number(order.subtotal) || Number(order.total_amount) || 0,
-                isGst: order.is_gst !== undefined ? Boolean(order.is_gst) : undefined,
-                gstPercentage: order.gst_percentage !== undefined ? Number(order.gst_percentage) : undefined,
-                taxMode: order.tax_mode || "exclusive",
-                isCompleted: order.status === "COMPLETED",
-                manualDiscount:
-                  Number(order.discount_amount) > 0 || Number(order.discount_value) > 0
-                    ? {
-                        type: (((order.discount_type || "FIXED").toUpperCase() as any)),
-                        value: Number(order.discount_value) || Number(order.discount_amount) || 0,
-                      }
-                    : null,
-                deliveryFee: Number(order.delivery_fee) || 0,
-                advanceAmount: Number(order.deposit_amount) || 0,
-                grandTotal: Number(order.total_amount) || undefined,
-              });
-              const total = totals.grandTotal;
-              const paid = totals.totalPaid;
-              const balanceDue = totals.remainingBalance;
+              const totals = calculateOrderTotals(order);
+              const total = totals.total;
+              const paid = totals.paid;
+              const balanceDue = totals.balance;
 
               return (
                 <tr key={order.id} className="hover:bg-slate-50/60 transition-colors">

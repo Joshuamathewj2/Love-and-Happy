@@ -1443,12 +1443,17 @@ export async function supabaseCreateAdvanceOrder(payload: {
       cash_received: Number(payload.depositAmount) || 0,
       payment_mode: payload.depositPaymentMode || 'CASH',
       bill_date: new Date().toISOString().split('T')[0],
+      created_at: new Date().toISOString(),
+    };
+    const { error: ordErr } = await supabase.from('orders').insert({
+      ...orderPayload,
       is_advance: true,
       order_type: 'ADVANCE',
       invoice_id: advId,
-      created_at: new Date().toISOString(),
-    };
-    await supabase.from('orders').insert(orderPayload);
+    });
+    if (ordErr) {
+      await supabase.from('orders').insert(orderPayload);
+    }
   } catch (e) {
     // Ignore secondary insert errors
   }

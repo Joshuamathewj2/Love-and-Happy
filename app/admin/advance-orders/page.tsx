@@ -1,12 +1,12 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Clock, MessageSquare, FileText, Eye, IndianRupee, Trash2, RefreshCw, Check, Loader2, X } from "lucide-react";
 import { fetchAdvanceOrders, removeAdvanceOrder, setAdvanceOrderStatus, finalizeAdvanceOrder } from "@/app/pos/actions";
 import { AdvanceOrderWithRelations, AdvanceOrderStatus } from "@/lib/types";
-import { calculateAdvanceOrderTotals } from "@/lib/advanceOrderCalculations";
+import { calculateOrderTotals } from "@/lib/advanceOrderCalculations";
 import { supabase } from "@/lib/supabaseClient";
 import { ReceiveRemainingPaymentModal } from "./ReceiveRemainingPaymentModal";
 
@@ -16,9 +16,28 @@ type FilterTab = "ALL" | AdvanceOrderStatus;
 
 export default function AdminAdvanceOrdersPage() {
   const router = useRouter();
-  const [advanceOrders, setAdvanceOrders] = useState<AdvanceOrderWithRelations[]>([]);
+  const [advanceOrders, setAdvanceOrders] = useState<AdvanceOrderWithRelations[]>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = sessionStorage.getItem("cached_advance_orders");
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        }
+      } catch (e) {}
+    }
+    return [];
+  });
   const [activeFilter, setActiveFilter] = useState<FilterTab>("ALL");
-  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        const cached = sessionStorage.getItem("cached_advance_orders");
+        if (cached && JSON.parse(cached)?.length > 0) return false;
+      } catch (e) {}
+    }
+    return true;
+  });
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   // ── Receive Remaining Payment modal state ──
@@ -94,7 +113,13 @@ export default function AdminAdvanceOrdersPage() {
         if (!adv.id || uniqueMap.has(adv.id)) continue;
         uniqueMap.set(adv.id, adv);
       }
-      setAdvanceOrders(Array.from(uniqueMap.values()));
+      const ordersList = Array.from(uniqueMap.values());
+      setAdvanceOrders(ordersList);
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem("cached_advance_orders", JSON.stringify(ordersList));
+        } catch (e) {}
+      }
     } catch (err) {
       console.error("Failed to load advance orders:", err);
     } finally {
@@ -106,25 +131,9 @@ export default function AdminAdvanceOrdersPage() {
   useEffect(() => {
     let isMounted = true;
 
-    // 1. Ensure auth session is restored before query execution
-    const initAuthAndFetch = async () => {
-      try {
-        const { data: { session }, error: sessionErr } = await supabase.auth.getSession();
-        if (sessionErr) {
-          console.warn("[Advance Orders] Auth session notice:", sessionErr);
-        } else if (session) {
-          console.log("[Advance Orders] Active auth session verified:", session.user.email);
-        }
-      } catch (authErr) {
-        console.warn("[Advance Orders] Session restore notice:", authErr);
-      } finally {
-        if (isMounted) {
-          loadData();
-        }
-      }
-    };
-
-    initAuthAndFetch();
+    // Fast mount fetch with zero auth waterfall
+    loadData();
+    supabase.auth.getSession().catch(() => {});
 
     // 2. Auth state change listener
     const { data: { subscription: authSub } } = supabase.auth.onAuthStateChange(() => {
@@ -185,27 +194,7 @@ export default function AdminAdvanceOrdersPage() {
   };
 
   // ── Helper: compute totals from saved DB values ──
-  const getAdvanceTotals = (adv: AdvanceOrderWithRelations) =>
-    calculateAdvanceOrderTotals({
-      items: (adv.items || []).map((it) => ({
-        price: Number(it.snapshot_price) || 0,
-        qty: Number(it.quantity) || 1,
-      })),
-      subtotal: Number(adv.subtotal) || Number(adv.total_amount) || 0,
-      isGst: adv.is_gst !== undefined ? Boolean(adv.is_gst) : undefined,
-      gstPercentage: adv.gst_percentage !== undefined ? Number(adv.gst_percentage) : undefined,
-      taxMode: (adv as any).tax_mode || "exclusive",
-      manualDiscount:
-        Number((adv as any).discount_amount) > 0 || Number((adv as any).discount_value) > 0
-          ? {
-              type: (((adv as any).discount_type || "FIXED").toUpperCase() as any),
-              value: Number((adv as any).discount_value) || Number((adv as any).discount_amount) || 0,
-            }
-          : null,
-      deliveryFee: Number((adv as any).delivery_fee) || 0,
-      advanceAmount: Number(adv.deposit_amount) || 0,
-      grandTotal: Number(adv.total_amount) || undefined,
-    });
+  const getAdvanceTotals = (adv: AdvanceOrderWithRelations) => calculateOrderTotals(adv);
 
   const openReceiveModal = (adv: AdvanceOrderWithRelations) => {
     setReceiveModalOrder(adv);
@@ -220,41 +209,54 @@ export default function AdminAdvanceOrdersPage() {
   };
 
   const handleStatusChange = async (orderId: string, newStatus: string, order: any) => {
-    if (order.status?.toUpperCase() === 'COMPLETED') return;
-    const targetOrder = advanceOrders.find((a) => a.id === orderId);
-    if (targetOrder?.status?.toUpperCase() === 'COMPLETED') return;
-    
+    const currentStatus = String(order?.status || "").toUpperCase();
     const statusUpper = String(newStatus || "").trim().toUpperCase() as AdvanceOrderStatus;
+    if (currentStatus === statusUpper) return;
+
+    const targetOrder = advanceOrders.find((a) => a.id === orderId) || order;
+    const totals = calculateOrderTotals(targetOrder);
 
     // If Completed selected and there is a remaining balance, open payment popup instead
-    if (statusUpper === "COMPLETED") {
-      const adv = advanceOrders.find((a) => a.id === orderId);
-      if (adv) {
-        const totals = getAdvanceTotals(adv);
-        if (totals.remainingBalance > 0) {
-          openReceiveModal(adv);
-          return;
-        }
-      }
+    if (statusUpper === "COMPLETED" && totals.balance > 0) {
+      openReceiveModal(targetOrder);
+      return;
     }
 
-    // For all other statuses (and Completed with zero balance): update ONLY status field
+    // Optimistically update state immediately
     setAdvanceOrders((prev) => {
-      const updated = prev.map((ord) =>
-        ord.id === orderId ? { ...ord, status: statusUpper } : ord
-      );
+      const updated = prev.map((ord) => {
+        if (ord.id === orderId) {
+          return {
+            ...ord,
+            status: statusUpper,
+            finalized_at: statusUpper === "COMPLETED" ? new Date().toISOString() : null,
+          };
+        }
+        return ord;
+      });
       const uniqueMap = new Map<string, AdvanceOrderWithRelations>();
       for (const o of updated) {
         if (!o.id || uniqueMap.has(o.id)) continue;
         uniqueMap.set(o.id, o);
       }
-      return Array.from(uniqueMap.values());
+      const list = Array.from(uniqueMap.values());
+      if (typeof window !== "undefined") {
+        try {
+          sessionStorage.setItem("cached_advance_orders", JSON.stringify(list));
+        } catch (e) {}
+      }
+      return list;
     });
 
     try {
       const advUpdates: any = { status: statusUpper };
-      if (statusUpper === "COMPLETED") advUpdates.finalized_at = new Date().toISOString();
-      else if (statusUpper === "CANCELLED") advUpdates.cancelled_at = new Date().toISOString();
+      if (statusUpper === "COMPLETED") {
+        advUpdates.finalized_at = new Date().toISOString();
+      } else if (statusUpper === "CANCELLED") {
+        advUpdates.cancelled_at = new Date().toISOString();
+      } else {
+        advUpdates.finalized_at = null;
+      }
 
       const { error: advErr } = await supabase
         .from("advance_orders")
@@ -287,46 +289,40 @@ export default function AdminAdvanceOrdersPage() {
   };
 
   // Filter advance orders based on active status filter
-  const filteredOrders = advanceOrders.filter((a) => {
-    if (activeFilter === "ALL") return true;
-    const status = (a.status || "PENDING").toUpperCase();
-    return status === activeFilter;
-  });
+  const filteredOrders = useMemo(() => {
+    return advanceOrders.filter((a) => {
+      if (activeFilter === "ALL") return true;
+      const status = (a.status || "PENDING").toUpperCase();
+      return status === activeFilter;
+    });
+  }, [advanceOrders, activeFilter]);
 
   const countAll = advanceOrders.length;
-  const countPending = advanceOrders.filter((a) => (a.status || "PENDING").toUpperCase() === "PENDING").length;
-  const countReady = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "READY").length;
-  const countCompleted = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "COMPLETED").length;
-  const countCancelled = advanceOrders.filter((a) => (a.status || "").toUpperCase() === "CANCELLED").length;
+  const countPending = useMemo(() => advanceOrders.filter((a) => (a.status || "PENDING").toUpperCase() === "PENDING").length, [advanceOrders]);
+  const countReady = useMemo(() => advanceOrders.filter((a) => (a.status || "").toUpperCase() === "READY").length, [advanceOrders]);
+  const countCompleted = useMemo(() => advanceOrders.filter((a) => (a.status || "").toUpperCase() === "COMPLETED").length, [advanceOrders]);
+  const countCancelled = useMemo(() => advanceOrders.filter((a) => (a.status || "").toUpperCase() === "CANCELLED").length, [advanceOrders]);
 
-  // Real-time Outstanding Balance from all non-cancelled orders
-  const activeOrders = advanceOrders.filter((a) => {
-    const st = (a.status || "PENDING").toUpperCase();
-    return st !== "CANCELLED";
-  });
-  const outstandingBalance = activeOrders.reduce((sum, a) => {
-    const totals = calculateAdvanceOrderTotals({
-      items: (a.items || []).map((it) => ({
-        price: Number(it.snapshot_price) || 0,
-        qty: Number(it.quantity) || 1,
-      })),
-      subtotal: Number(a.subtotal) || Number(a.total_amount) || 0,
-      isGst: a.is_gst !== undefined ? Boolean(a.is_gst) : undefined,
-      gstPercentage: a.gst_percentage !== undefined ? Number(a.gst_percentage) : undefined,
-      taxMode: a.tax_mode || "exclusive",
-      manualDiscount:
-        Number(a.discount_amount) > 0 || Number(a.discount_value) > 0
-          ? {
-              type: ((a.discount_type || "FIXED").toUpperCase() as any),
-              value: Number(a.discount_value) || Number(a.discount_amount) || 0,
-            }
-          : null,
-      deliveryFee: Number(a.delivery_fee) || 0,
-      advanceAmount: Number(a.deposit_amount) || 0,
-      grandTotal: Number(a.total_amount) || undefined,
-    });
-    return sum + totals.remainingBalance;
-  }, 0);
+  // Derived Outstanding Balance: sum of balance due of orders whose status is PENDING or READY only.
+  // COMPLETED and CANCELLED orders must contribute 0. Respects filtered set.
+  const { outstandingBalance, activeCount } = useMemo(() => {
+    let sum = 0;
+    let count = 0;
+    for (const a of filteredOrders) {
+      const st = (a.status || "PENDING").toUpperCase();
+      if (st === "PENDING" || st === "READY") {
+        const totals = calculateOrderTotals(a);
+        if (totals.balance > 0) {
+          sum += totals.balance;
+          count++;
+        }
+      }
+    }
+    return {
+      outstandingBalance: Math.round(sum * 100) / 100,
+      activeCount: count,
+    };
+  }, [filteredOrders]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 font-sans p-4 sm:p-8">
@@ -386,7 +382,7 @@ export default function AdminAdvanceOrdersPage() {
                 ₹{outstandingBalance.toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </p>
               <p className="text-[10px] text-slate-400 mt-0.5">
-                {activeOrders.length} active orders awaiting balance
+                {activeCount} active orders awaiting balance
               </p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600">
@@ -498,7 +494,7 @@ export default function AdminAdvanceOrdersPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 text-xs">
-              {isLoading ? (
+              {isLoading && advanceOrders.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="p-12 text-center text-xs font-semibold text-slate-400">
                     Loading advance orders...
@@ -512,30 +508,10 @@ export default function AdminAdvanceOrdersPage() {
                 </tr>
               ) : (
                 filteredOrders.map((order: AdvanceOrderWithRelations) => {
-                  const totals = calculateAdvanceOrderTotals({
-                    items: (order.items || []).map((it) => ({
-                      price: Number(it.snapshot_price) || 0,
-                      qty: Number(it.quantity) || 1,
-                    })),
-                    subtotal: Number(order.subtotal) || Number(order.total_amount) || 0,
-                    isGst: order.is_gst !== undefined ? Boolean(order.is_gst) : undefined,
-                    gstPercentage: order.gst_percentage !== undefined ? Number(order.gst_percentage) : undefined,
-                    taxMode: order.tax_mode || "exclusive",
-                    isCompleted: order.status?.toUpperCase() === "COMPLETED",
-                    manualDiscount:
-                      Number(order.discount_amount) > 0 || Number(order.discount_value) > 0
-                        ? {
-                            type: (((order.discount_type || "FIXED").toUpperCase() as any)),
-                            value: Number(order.discount_value) || Number(order.discount_amount) || 0,
-                          }
-                        : null,
-                    deliveryFee: Number(order.delivery_fee) || 0,
-                    advanceAmount: Number(order.deposit_amount) || 0,
-                    grandTotal: Number(order.total_amount) || undefined,
-                  });
-                  const total = totals.grandTotal;
-                  const paid = totals.totalPaid;
-                  const balanceDue = totals.remainingBalance;
+                  const totals = calculateOrderTotals(order);
+                  const total = totals.total;
+                  const paid = totals.paid;
+                  const balanceDue = totals.balance;
                   const isCompleted = order.status?.toUpperCase() === 'COMPLETED';
 
                   return (
@@ -596,38 +572,34 @@ export default function AdminAdvanceOrdersPage() {
 
                       {/* Status */}
                       <td className="w-[12%] text-center px-4 py-3 align-middle">
-                        {isCompleted ? (
-                          <span className="px-3 py-1 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                            COMPLETED
-                          </span>
-                        ) : (
-                          <div className="relative inline-block w-full max-w-[150px] mx-auto">
-                            <select
-                              key={`adv-status-admin-${order.id}-${order.status}`}
-                              value={order.status?.toUpperCase() || "PENDING"}
-                              onChange={(e) => handleStatusChange(order.id, e.target.value, order)}
-                              className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
-                                order.status?.toUpperCase() === "READY"
-                                  ? "bg-blue-50 text-blue-800 border-blue-300 ring-1 ring-pink-300"
-                                  : order.status?.toUpperCase() === "CANCELLED"
-                                  ? "bg-rose-50 text-rose-800 border-rose-300"
-                                  : "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-pink-300"
-                              }`}
-                            >
-                              <option value="PENDING" className="bg-white text-gray-900 font-semibold">PENDING</option>
-                              <option value="READY" className="bg-white text-gray-900 font-semibold">READY</option>
-                              <option value="COMPLETED" className="bg-white text-gray-900 font-semibold">COMPLETED</option>
-                              <option value="CANCELLED" className="bg-white text-gray-900 font-semibold">CANCELLED</option>
-                            </select>
+                        <div className="relative inline-block w-full max-w-[150px] mx-auto">
+                          <select
+                            key={`adv-status-admin-${order.id}-${order.status}`}
+                            value={order.status?.toUpperCase() || "PENDING"}
+                            onChange={(e) => handleStatusChange(order.id, e.target.value, order)}
+                            className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                              isCompleted
+                                ? "bg-emerald-50 text-emerald-800 border-emerald-300"
+                                : order.status?.toUpperCase() === "READY"
+                                ? "bg-blue-50 text-blue-800 border-blue-300 ring-1 ring-pink-300"
+                                : order.status?.toUpperCase() === "CANCELLED"
+                                ? "bg-rose-50 text-rose-800 border-rose-300"
+                                : "bg-amber-50 text-amber-800 border-amber-300 ring-1 ring-pink-300"
+                            }`}
+                          >
+                            <option value="PENDING" className="bg-white text-gray-900 font-semibold">PENDING</option>
+                            <option value="READY" className="bg-white text-gray-900 font-semibold">READY</option>
+                            <option value="COMPLETED" className="bg-white text-gray-900 font-semibold">COMPLETED</option>
+                            <option value="CANCELLED" className="bg-white text-gray-900 font-semibold">CANCELLED</option>
+                          </select>
 
-                            {/* Chevron Down Icon */}
-                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
-                              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
-                              </svg>
-                            </div>
+                          {/* Chevron Down Icon */}
+                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
+                            </svg>
                           </div>
-                        )}
+                        </div>
                       </td>
 
                       {/* Actions (WhatsApp, Invoice, View Details, Collect Payment, Delete) */}

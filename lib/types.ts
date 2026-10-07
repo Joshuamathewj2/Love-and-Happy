@@ -59,6 +59,7 @@ export type OrderRow = {
   is_advance?: boolean | null;
   order_type?: string | null;
   invoice_id?: string | null;
+  tax_mode?: 'inclusive' | 'exclusive';
 };
 
 export type OrderItemRow = {
