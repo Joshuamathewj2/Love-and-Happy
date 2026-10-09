@@ -1086,6 +1086,9 @@ export async function supabaseListAdvanceOrders(): Promise<AdvanceOrderWithRelat
       discount_value: r.discount_value !== undefined ? Number(r.discount_value) : undefined,
       discount_amount: r.discount_amount !== undefined ? Number(r.discount_amount) : undefined,
       delivery_fee: r.delivery_fee !== undefined ? Number(r.delivery_fee) : undefined,
+      finalPaymentAmount: r.finalized_order_id ? Math.max(0, (Number(r.total_amount) || 0) - (Number(r.deposit_amount) || 0)) : undefined,
+      finalPaymentMethod: r.finalized_order_id ? (r.deposit_payment_mode || 'CASH') : undefined,
+      completedAt: r.finalized_at || null,
     }));
 
     try {

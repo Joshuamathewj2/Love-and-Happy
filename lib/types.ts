@@ -113,6 +113,9 @@ export type AdvanceOrderRow = {
   discount_value?: number;
   discount_amount?: number;
   delivery_fee?: number;
+  finalPaymentAmount?: number;
+  finalPaymentMethod?: PaymentMode;
+  completedAt?: string | null;
 };
 
 export type AdvanceOrderItemRow = {

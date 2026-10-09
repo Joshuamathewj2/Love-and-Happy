@@ -182,12 +182,6 @@ export function calculateAdvanceOrderTotals(
   let remainingBalance = Math.max(0, roundToTwo(grandTotal - totalPaid));
   let settlementPaid = additionalPaid;
 
-  if (params.isCompleted) {
-    totalPaid = grandTotal;
-    remainingBalance = 0;
-    settlementPaid = Math.max(0, roundToTwo(grandTotal - advancePaid));
-  }
-
   let isValid = true;
   let errorMessage: string | undefined = undefined;
 

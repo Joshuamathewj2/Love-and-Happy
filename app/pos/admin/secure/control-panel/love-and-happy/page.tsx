@@ -1348,7 +1348,6 @@ export default function POSBilling() {
       isGst: adv.is_gst !== undefined ? Boolean(adv.is_gst) : undefined,
       gstPercentage: adv.gst_percentage !== undefined ? Number(adv.gst_percentage) : undefined,
       taxMode: adv.tax_mode || "exclusive",
-      isCompleted: adv.status === "COMPLETED",
       manualDiscount:
         Number(adv.discount_amount) > 0 || Number(adv.discount_value) > 0
           ? {
@@ -4738,19 +4737,22 @@ export default function POSBilling() {
 
                     {(() => {
                       const t = getAdvanceTotals(selectedAdvance);
+                      const modalTotal = Number(selectedAdvance.total_amount) || t.grandTotal;
+                      const modalPaid = Number(selectedAdvance.deposit_amount) || t.advancePaid;
+                      const modalBal = Math.max(0, modalTotal - modalPaid);
                       return (
                         <div className="grid grid-cols-3 gap-2 text-center">
                           <div className="bg-[#F4F4F5] border border-black/10 rounded-lg p-2.5">
                             <p className="text-[9px] font-bold text-[#007A87] uppercase tracking-wider">Total</p>
-                            <p className="text-sm font-black text-black">₹{t.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                            <p className="text-sm font-black text-black">₹{modalTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                           </div>
                           <div className="bg-[#DCFCE7] border border-[#16A34A]/30 rounded-lg p-2.5">
                             <p className="text-[9px] font-bold text-[#166534] uppercase tracking-wider">Paid</p>
-                            <p className="text-sm font-black text-[#166534]">₹{t.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                            <p className="text-sm font-black text-[#166534]">₹{modalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                           </div>
-                          <div className={`border rounded-lg p-2.5 ${t.remainingBalance > 0 ? "bg-[#FEE2E2] border-[#DC2626]/30 text-[#991B1B]" : "bg-[#DCFCE7] border-[#16A34A]/30 text-[#166534]"}`}>
+                          <div className={`border rounded-lg p-2.5 ${modalBal > 0 ? "bg-[#FEE2E2] border-[#DC2626]/30 text-[#991B1B]" : "bg-[#DCFCE7] border-[#16A34A]/30 text-[#166534]"}`}>
                             <p className="text-[9px] font-bold uppercase tracking-wider">Balance</p>
-                            <p className="text-sm font-black">₹{t.remainingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                            <p className="text-sm font-black">₹{modalBal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
                           </div>
                         </div>
                       );
@@ -4890,8 +4892,12 @@ export default function POSBilling() {
                   isDateInPeriod(a.created_at, advPeriod, advStartDate, advEndDate)
                 );
                 const outstanding = filteredByPeriod
-                  .filter((a) => a.status !== "CANCELLED")
-                  .reduce((acc, a) => acc + balanceRemaining(a), 0);
+                  .filter((a) => a.status === "PENDING" || a.status === "READY")
+                  .reduce((acc, a) => {
+                    const rowTotal = Number(a.total_amount) || getAdvanceTotals(a).grandTotal;
+                    const rowPaid = Number(a.deposit_amount) || getAdvanceTotals(a).advancePaid;
+                    return acc + Math.max(0, rowTotal - rowPaid);
+                  }, 0);
                 const ready = filteredByPeriod.filter((a) => a.status === "READY").length;
                 const completed = filteredByPeriod.filter((a) => a.status === "COMPLETED").length;
                 return (
@@ -5014,13 +5020,20 @@ export default function POSBilling() {
                                   )}
                                 </td>
                                 <td className="w-[18%] text-left px-4 py-3 align-middle">
-                                  <div className="space-y-0.5">
-                                    <p className="text-xs font-bold text-slate-900">Total: ₹{totals.grandTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                                    <p className="text-xs font-semibold text-emerald-600">Paid: ₹{totals.totalPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
-                                    <p className={`text-xs font-semibold ${totals.remainingBalance > 0 ? "text-rose-600" : "text-emerald-600"}`}>
-                                      Balance: ₹{totals.remainingBalance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-                                    </p>
-                                  </div>
+                                  {(() => {
+                                    const rowTotal = Number(a.total_amount) || totals.grandTotal;
+                                    const rowPaid = Number(a.deposit_amount) || totals.advancePaid;
+                                    const rowBal = Math.max(0, rowTotal - rowPaid);
+                                    return (
+                                      <div className="space-y-0.5">
+                                        <p className="text-xs font-bold text-slate-900">Total: ₹{rowTotal.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                                        <p className="text-xs font-semibold text-emerald-600">Paid: ₹{rowPaid.toLocaleString(undefined, { minimumFractionDigits: 2 })}</p>
+                                        <p className={`text-xs font-semibold ${rowBal > 0 ? "text-rose-600" : "text-emerald-600"}`}>
+                                          Balance: ₹{rowBal.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                        </p>
+                                      </div>
+                                    );
+                                  })()}
                                 </td>
                                 <td className="w-[10%] text-center px-4 py-3 align-middle font-medium text-slate-700 text-xs">
                                   {a.delivery_date ? new Date(a.delivery_date).toLocaleDateString("en-IN") : "—"}
@@ -5106,9 +5119,9 @@ export default function POSBilling() {
                     ) : (
                       filtered.map((a) => {
                         const totals = getAdvanceTotals(a);
-                        const bal = totals.remainingBalance;
-                        const paid = totals.totalPaid;
-                        const grandTotal = totals.grandTotal;
+                        const grandTotal = Number(a.total_amount) || totals.grandTotal;
+                        const paid = Number(a.deposit_amount) || totals.advancePaid;
+                        const bal = Math.max(0, grandTotal - paid);
 
                         return (
                           <div key={a.id} className="bg-white border border-black/10 rounded-xl p-4 shadow-xs space-y-3">

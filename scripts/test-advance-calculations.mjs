@@ -120,7 +120,7 @@ test("Full payment as advance (remaining 0)", () => {
   assert.equal(res.isValid, true);
 });
 
-test("Status calculation: isCompleted settles the balance (totalPaid = grandTotal, remainingBalance = 0)", () => {
+test("Status calculation: Advance deposit snapshot values are static (Total, Paid, Balance do not mutate on isCompleted)", () => {
   const pendingRes = calculateAdvanceOrderTotals({
     subtotal: 1500,
     isGst: true,
@@ -142,10 +142,10 @@ test("Status calculation: isCompleted settles the balance (totalPaid = grandTota
     isCompleted: true,
   });
 
-  // When marked COMPLETED, remaining balance is settled: balance = 0, paid = grandTotal
+  // When marked COMPLETED, advance deposit snapshot remains static:
   assert.equal(completedRes.grandTotal, 1800);
-  assert.equal(completedRes.totalPaid, 1800);
-  assert.equal(completedRes.remainingBalance, 0);
+  assert.equal(completedRes.totalPaid, 600);
+  assert.equal(completedRes.remainingBalance, 1200);
 
   // When actual final settlement payment is confirmed:
   const settledRes = calculateAdvanceOrderTotals({
@@ -243,7 +243,7 @@ test("User Case 5: Legacy record without gst fields (stored grandTotal 1800, sub
   assert.equal(res.remainingBalance, 1200);
 });
 
-test("Output for order across statuses: COMPLETED settles balance to 0, PENDING/READY has balance", () => {
+test("Output for order across statuses: snapshot is static across statuses including COMPLETED", () => {
   const nonCompletedStatuses = ["PENDING", "READY", "pending", "ready", ""];
   for (const status of nonCompletedStatuses) {
     const res = calculateAdvanceOrderTotals({
@@ -274,8 +274,8 @@ test("Output for order across statuses: COMPLETED settles balance to 0, PENDING/
     isCompleted: true,
   });
   assert.equal(completedRes.grandTotal, 1770);
-  assert.equal(completedRes.totalPaid, 1770);
-  assert.equal(completedRes.remainingBalance, 0);
+  assert.equal(completedRes.totalPaid, 770);
+  assert.equal(completedRes.remainingBalance, 1000);
 });
 
 test("GST Inclusive Mode reconciles: TaxableValue + CGST + SGST === GrossAmount (18% on 8000)", () => {
@@ -351,7 +351,7 @@ test("Verification Case 1: Advance order of 1500 with 500 paid and 18% GST -> To
   assert.equal(res.gst, 270);
 });
 
-test("Verification Case 2: Outstanding Balance before vs after marking COMPLETED: balance drops to 0, paid equals total", () => {
+test("Verification Case 2: Advance order snapshot remains static when marked COMPLETED", () => {
   const pending = calculateOrderTotals({
     subtotal: 1000,
     deposit_amount: 800,
@@ -367,8 +367,8 @@ test("Verification Case 2: Outstanding Balance before vs after marking COMPLETED
     status: "COMPLETED",
   });
   assert.equal(completed.total, 1000);
-  assert.equal(completed.paid, 1000);
-  assert.equal(completed.balance, 0);
+  assert.equal(completed.paid, 800);
+  assert.equal(completed.balance, 200);
 });
 
 test("Verification Case 3: Invoice test: Subtotal 999, Discount 20, GST 18%, Delivery 20 -> GST +176.22, TOTAL 1175.22", () => {
@@ -380,6 +380,7 @@ test("Verification Case 3: Invoice test: Subtotal 999, Discount 20, GST 18%, Del
     is_gst: true,
     gst_percentage: 18,
     delivery_fee: 20,
+    cash_received: 1175.22,
     status: "COMPLETED",
   });
 
@@ -396,6 +397,7 @@ test("Verification Case 3: Invoice test: Subtotal 999, Discount 20, GST 18%, Del
 test("Verification Case 6: Older order with no GST/discount/delivery renders correctly", () => {
   const res = calculateOrderTotals({
     subtotal: 500,
+    cash_received: 500,
     status: "COMPLETED",
   });
 
