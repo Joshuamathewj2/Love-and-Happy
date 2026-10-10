@@ -1469,9 +1469,14 @@ export async function supabaseUpdateAdvanceOrderStatus(id: string, status: Advan
   const statusUpper = String(status || '').trim().toUpperCase() as AdvanceOrderStatus;
   const { data: advData } = await supabase
     .from('advance_orders')
-    .select('total_amount, subtotal')
+    .select('total_amount, subtotal, status')
     .eq('id', id)
     .maybeSingle();
+
+  // Lock: an already COMPLETED order can never move to another status.
+  if (String((advData as any)?.status || '').toUpperCase() === 'COMPLETED' && statusUpper !== 'COMPLETED') {
+    throw new Error('Completed advance orders cannot change status');
+  }
 
   const advUpdates: any = {
     status: statusUpper,

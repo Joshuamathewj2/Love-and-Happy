@@ -209,6 +209,13 @@ export default function AdminAdvanceOrdersPage() {
   };
 
   const handleStatusChange = async (orderId: string, newStatus: string, order: any) => {
+    // Lock guard: a saved COMPLETED order can never change status again.
+    if (
+      String(order?.status || "").toUpperCase() === "COMPLETED" ||
+      String(advanceOrders.find((a) => a.id === orderId)?.status || "").toUpperCase() === "COMPLETED"
+    ) {
+      return;
+    }
     const currentStatus = String(order?.status || "").toUpperCase();
     const statusUpper = String(newStatus || "").trim().toUpperCase() as AdvanceOrderStatus;
     if (currentStatus === statusUpper) return;
@@ -577,7 +584,8 @@ export default function AdminAdvanceOrdersPage() {
                             key={`adv-status-admin-${order.id}-${order.status}`}
                             value={order.status?.toUpperCase() || "PENDING"}
                             onChange={(e) => handleStatusChange(order.id, e.target.value, order)}
-                            className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                            disabled={isCompleted}
+                            className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border ${isCompleted ? "cursor-not-allowed opacity-75" : "cursor-pointer"} focus:outline-none transition-colors ${
                               isCompleted
                                 ? "bg-emerald-50 text-emerald-800 border-emerald-300"
                                 : order.status?.toUpperCase() === "READY"
@@ -594,7 +602,7 @@ export default function AdminAdvanceOrdersPage() {
                           </select>
 
                           {/* Chevron Down Icon */}
-                          <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
+                          <div className={`pointer-events-none absolute inset-y-0 right-0 items-center px-2.5 text-inherit opacity-70 ${isCompleted ? "hidden" : "flex"}`}>
                             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
                             </svg>
