@@ -1473,9 +1473,9 @@ export async function supabaseUpdateAdvanceOrderStatus(id: string, status: Advan
     .eq('id', id)
     .maybeSingle();
 
-  // Completed orders are permanently locked: reject any change to a different status
+  // Completed orders are permanently locked: ignore any change to a different status
   if (String((advData as any)?.status || '').toUpperCase() === 'COMPLETED' && statusUpper !== 'COMPLETED') {
-    throw new Error('Completed orders cannot be changed');
+    return;
   }
 
   const advUpdates: any = {

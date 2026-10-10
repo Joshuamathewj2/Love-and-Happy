@@ -1526,6 +1526,8 @@ export default function POSBilling() {
   const handleStatusChange = async (orderId: string, newStatus: string) => {
     const adv = advanceOrders.find((a) => a.id === orderId);
     if (!adv) return;
+    // Lock guard: saved COMPLETED orders can never change status
+    if (String(adv.status || "").toUpperCase() === "COMPLETED") return;
 
     if (newStatus === "COMPLETED") {
       const totals = getAdvanceTotals(adv);
@@ -5044,7 +5046,8 @@ export default function POSBilling() {
                                       key={`adv-status-${a.id}-${a.status || "PENDING"}`}
                                       value={a.status || "PENDING"}
                                       onChange={(e) => handleStatusChange(a.id, e.target.value)}
-                                      className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                                      disabled={a.status === "COMPLETED"}
+                                      className={`w-full appearance-none px-2 py-1 pr-6 rounded-xl text-[10px] font-bold tracking-normal border focus:outline-none transition-colors ${a.status === "COMPLETED" ? "cursor-not-allowed opacity-70" : "cursor-pointer"} ${
                                         a.status === "COMPLETED"
                                           ? "bg-emerald-50 text-emerald-800 border-emerald-300"
                                           : a.status === "READY"
@@ -5059,7 +5062,7 @@ export default function POSBilling() {
                                       <option value="COMPLETED">COMPLETED</option>
                                       <option value="CANCELLED">CANCELLED</option>
                                     </select>
-                                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
+                                    <div hidden={a.status === "COMPLETED"} className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2.5 text-inherit opacity-70">
                                       <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
                                       </svg>
@@ -5200,7 +5203,8 @@ export default function POSBilling() {
                                   key={`adv-m-status-${a.id}-${a.status || "PENDING"}`}
                                   value={a.status || "PENDING"}
                                   onChange={(e) => handleStatusChange(a.id, e.target.value)}
-                                  className={`w-full appearance-none px-3 py-2 pr-8 rounded-xl text-xs font-bold tracking-normal border cursor-pointer focus:outline-none transition-colors ${
+                                  disabled={a.status === "COMPLETED"}
+                                  className={`w-full appearance-none px-3 py-2 pr-8 rounded-xl text-xs font-bold tracking-normal border focus:outline-none transition-colors ${a.status === "COMPLETED" ? "cursor-not-allowed opacity-70" : "cursor-pointer"} ${
                                     a.status === "COMPLETED"
                                       ? "bg-emerald-50 text-emerald-800 border-emerald-300"
                                       : a.status === "READY"
@@ -5215,7 +5219,7 @@ export default function POSBilling() {
                                   <option value="COMPLETED">COMPLETED</option>
                                   <option value="CANCELLED">CANCELLED</option>
                                 </select>
-                                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-inherit opacity-70">
+                                <div hidden={a.status === "COMPLETED"} className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-inherit opacity-70">
                                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M19 9l-7 7-7-7" />
                                   </svg>
