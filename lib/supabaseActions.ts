@@ -1473,9 +1473,9 @@ export async function supabaseUpdateAdvanceOrderStatus(id: string, status: Advan
     .eq('id', id)
     .maybeSingle();
 
-  // Lock: an already COMPLETED order can never move to another status.
+  // Completed orders are permanently locked: reject any change to a different status
   if (String((advData as any)?.status || '').toUpperCase() === 'COMPLETED' && statusUpper !== 'COMPLETED') {
-    throw new Error('Completed advance orders cannot change status');
+    throw new Error('Completed orders cannot be changed');
   }
 
   const advUpdates: any = {
